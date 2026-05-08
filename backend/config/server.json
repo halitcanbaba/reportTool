@@ -1,0 +1,10 @@
+{
+  "host": "0.0.0.0",
+  "port": 5151,
+  "db_path": "data/reportTool.sqlite",
+  "output_dir": "data/output",
+  "log_path": "data/run.log",
+  "dll_dir": ".",
+  "thread_pool_size": 8,
+  "max_concurrent_jobs": 2
+}

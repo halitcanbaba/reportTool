@@ -1,0 +1,50 @@
+# Build output
+backend/bin/
+backend/obj/
+backend/x64/
+backend/Debug/
+backend/Release/
+backend/ReportTool/Debug/
+backend/ReportTool/Release/
+backend/ReportTool/x64/
+backend/ReportTool/*.user
+*.suo
+*.tlog
+*.log
+*.idb
+*.pdb
+*.exp
+*.lib
+*.exe
+*.dll
+*.obj
+*.iobj
+*.ipdb
+
+# Vendored single-header dependencies (fetch via scripts/fetch_deps.ps1)
+backend/ReportTool/third_party/*
+!backend/ReportTool/third_party/.gitkeep
+!backend/ReportTool/third_party/FETCH.md
+
+# Runtime data
+backend/data/*.sqlite
+backend/data/*.sqlite-wal
+backend/data/*.sqlite-shm
+backend/data/output/
+backend/data/run.log
+
+# Secrets
+backend/.env
+.env
+*.env.local
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/npm-debug.log*
+
+# IDE
+.vs/
+.vscode/
+.idea/

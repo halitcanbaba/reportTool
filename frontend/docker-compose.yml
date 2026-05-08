@@ -1,0 +1,15 @@
+services:
+  reporttool-ui:
+    build:
+      context: .
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-}
+    image: reporttool-ui:latest
+    container_name: reporttool-ui
+    ports:
+      - "8080:80"
+    extra_hosts:
+      # On Linux Docker hosts this is required for host.docker.internal to resolve.
+      # On Docker Desktop (Windows/Mac) it's already provided but harmless.
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
