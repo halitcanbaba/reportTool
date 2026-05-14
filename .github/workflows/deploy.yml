@@ -28,9 +28,10 @@ jobs:
     runs-on: [self-hosted, Windows, X64, production, reportTool]
     env:
       MT5_DLL_SOURCE: C:\MetaTrader5SDK\Libs\MT5APIManager64.dll
-      WSL_DISTRO:     Ubuntu-22.04
-      WSL_USER:       halit
       NSSM:           C:\ReportTool\bin\nssm.exe
+      NGINX_DIR:      C:\tools\nginx-1.29.8
+      NGINX_SVC:      nginx
+      SITES_ROOT:     C:\nginx-sites
 
     steps:
       - uses: actions/checkout@v4
@@ -54,9 +55,9 @@ jobs:
           $suffix       = if ($instance -eq 'default') { '' } else { "-$instance" }
           $installRoot  = "C:\ReportTool$suffix"
           $serviceName  = "ReportTool$suffix"
-          $composeProj  = "reporttool$suffix"
-          $imageTag     = "reporttool-ui:$instance"
-          $containerNm  = "reporttool-ui$suffix"
+          $siteName     = "reporttool-$instance"
+          $siteDir      = "$env:SITES_ROOT\$siteName"
+          $nginxConf    = "$env:NGINX_DIR\conf\conf.d\$siteName.conf"
           $backendPort  = 5151 + $offset
           $frontendPort = 8080 + $offset
 
@@ -64,9 +65,9 @@ jobs:
           instance=$instance
           install_root=$installRoot
           service_name=$serviceName
-          compose_project=$composeProj
-          image_tag=$imageTag
-          container_name=$containerNm
+          site_name=$siteName
+          site_dir=$siteDir
+          nginx_conf=$nginxConf
           backend_port=$backendPort
           frontend_port=$frontendPort
           first_install=$($firstInstall.ToString().ToLower())
@@ -80,13 +81,22 @@ jobs:
         shell: powershell
         run: |
           whoami
-          "MSBuild: $((Get-Command msbuild.exe -ErrorAction SilentlyContinue).Source)"
-          "nssm:    $env:NSSM  exists=$(Test-Path $env:NSSM)"
-          "MT5 DLL: $env:MT5_DLL_SOURCE  exists=$(Test-Path $env:MT5_DLL_SOURCE)"
-          & wsl --list --verbose
+          "MSBuild:  $((Get-Command msbuild.exe -ErrorAction SilentlyContinue).Source)"
+          "Node:     $((Get-Command node.exe    -ErrorAction SilentlyContinue).Source)"
+          "npm:      $((Get-Command npm.cmd     -ErrorAction SilentlyContinue).Source)"
+          "nssm:     $env:NSSM  exists=$(Test-Path $env:NSSM)"
+          "nginx:    $env:NGINX_DIR  exists=$(Test-Path "$env:NGINX_DIR\nginx.exe")"
+          "MT5 DLL:  $env:MT5_DLL_SOURCE  exists=$(Test-Path $env:MT5_DLL_SOURCE)"
+          $svc = Get-Service $env:NGINX_SVC -ErrorAction SilentlyContinue
+          "nginx svc: $($svc.Name)=$($svc.Status)"
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
       - name: Fetch backend dependencies
         shell: powershell
@@ -113,6 +123,19 @@ jobs:
           "exe=$exe"      | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "exedir=$(Split-Path $exe)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Write-Host "Built: $exe"
+
+      - name: Build frontend (SPA)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-Location frontend
+          npm install --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
+          $env:VITE_API_BASE = ''
+          npm run build
+          if ($LASTEXITCODE -ne 0) { throw "npm run build failed" }
+          if (-not (Test-Path 'dist\index.html')) { throw "frontend dist missing after build" }
+          Write-Host "Frontend built: $(Get-Item dist | Select-Object -ExpandProperty FullName)"
 
       - name: Bootstrap install root (first_time_install only)
         if: steps.cfg.outputs.first_install == 'true'
@@ -159,17 +182,44 @@ jobs:
           }
           $masterKey = (Get-Content $keyPath -Raw).Trim()
 
-          # Render config\server.json from repo template, swap port + paths
+          # Render config\server.json from repo template
+          # Backend now binds loopback only — nginx is the public-facing layer.
           $tmpl = 'backend\config\server.json'
           if (-not (Test-Path $tmpl)) { throw "$tmpl missing in repo" }
           $cfg = Get-Content $tmpl -Raw | ConvertFrom-Json
           $cfg.port = $port
-          $cfg.host = '0.0.0.0'
+          $cfg.host = '127.0.0.1'
           $cfg.db_path    = 'data/reportTool.sqlite'
           $cfg.output_dir = 'data/output'
           $cfg.log_path   = 'data/run.log'
           $cfg.dll_dir    = '.'
           ($cfg | ConvertTo-Json -Depth 10) | Set-Content (Join-Path $root 'config\server.json') -Encoding utf8
+
+      - name: Bootstrap nginx (idempotent)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $nginxDir = $env:NGINX_DIR
+          if (-not (Test-Path "$nginxDir\nginx.exe")) { throw "native nginx not found at $nginxDir" }
+
+          $confD = Join-Path $nginxDir 'conf\conf.d'
+          if (-not (Test-Path $confD)) { New-Item -ItemType Directory -Path $confD -Force | Out-Null }
+
+          if (-not (Test-Path $env:SITES_ROOT)) { New-Item -ItemType Directory -Path $env:SITES_ROOT -Force | Out-Null }
+
+          # Ensure main nginx.conf has `include conf.d/*.conf;` inside the http block
+          $nginxConf = Join-Path $nginxDir 'conf\nginx.conf'
+          $content = Get-Content $nginxConf -Raw
+          if ($content -notmatch 'include\s+conf\.d/\*\.conf;') {
+            # Inject just after `http {` so per-instance configs are loaded.
+            $patched = [regex]::Replace($content, '(?m)^http\s*\{\s*$', "http {`n    include conf.d/*.conf;")
+            if ($patched -eq $content) { throw "could not patch nginx.conf — no `http {` block found" }
+            Copy-Item $nginxConf "$nginxConf.bak.$(Get-Date -Format yyyyMMdd-HHmmss)" -Force
+            [System.IO.File]::WriteAllText($nginxConf, $patched)
+            Write-Host "Added 'include conf.d/*.conf;' to nginx.conf (backup written)"
+          } else {
+            Write-Host "nginx.conf already includes conf.d/*.conf"
+          }
 
       - name: Register / update nssm service
         if: steps.cfg.outputs.first_install == 'true'
@@ -268,63 +318,74 @@ jobs:
             Get-ChildItem $rel -Directory | Sort-Object LastWriteTime -Descending | Select-Object -Skip 5 | Remove-Item -Recurse -Force
           }
 
-      - name: Deploy frontend (WSL Docker Compose)
+      - name: Take down legacy WSL Docker frontend (best effort)
+        shell: powershell
+        run: |
+          # Old workflow ran the SPA in a WSL Docker container. Native nginx now
+          # owns the same port — remove any leftover container so the listener
+          # frees up cleanly on first migration. Subsequent runs are no-ops.
+          $cname = "reporttool-ui$( if ('${{ steps.cfg.outputs.instance }}' -eq 'default') { '' } else { '-${{ steps.cfg.outputs.instance }}' })"
+          try {
+            wsl -d Ubuntu-22.04 -u halit -- bash -lc "docker rm -f '$cname' >/dev/null 2>&1 || true"
+          } catch {
+            Write-Host "WSL docker cleanup skipped: $($_.Exception.Message)"
+          }
+
+      - name: Deploy frontend (native nginx)
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $instance  = '${{ steps.cfg.outputs.instance }}'
-          $project   = '${{ steps.cfg.outputs.compose_project }}'
-          $image     = '${{ steps.cfg.outputs.image_tag }}'
-          $cname     = '${{ steps.cfg.outputs.container_name }}'
-          $fePort    = [int]'${{ steps.cfg.outputs.frontend_port }}'
+          $siteDir   = '${{ steps.cfg.outputs.site_dir }}'
+          $confPath  = '${{ steps.cfg.outputs.nginx_conf }}'
           $bePort    = [int]'${{ steps.cfg.outputs.backend_port }}'
+          $fePort    = [int]'${{ steps.cfg.outputs.frontend_port }}'
+          $nginxExe  = Join-Path $env:NGINX_DIR 'nginx.exe'
+          $distSrc   = Join-Path $env:GITHUB_WORKSPACE 'frontend\dist'
 
-          $repoWsl = ($env:GITHUB_WORKSPACE -replace '^C:','/mnt/c') -replace '\\','/'
-          $feDirWsl  = "$repoWsl/frontend"
-          $feDirWin  = Join-Path $env:GITHUB_WORKSPACE 'frontend'
+          if (-not (Test-Path $distSrc)) { throw "frontend dist missing: $distSrc" }
 
-          $routeLine = (& wsl -d $env:WSL_DISTRO -u $env:WSL_USER -- bash -lc 'ip route show default' | Out-String).Trim()
-          if ($routeLine -match 'default\s+via\s+([0-9\.]+)') {
-            $winIp = $Matches[1]
-          } else {
-            throw "Cannot parse WSL gateway IP from route output: $routeLine"
+          New-Item -ItemType Directory -Path $siteDir -Force | Out-Null
+          $distDst = Join-Path $siteDir 'dist'
+          $distNew = Join-Path $siteDir 'dist.new'
+          $distBak = Join-Path $siteDir 'dist.bak'
+          if (Test-Path $distNew) { Remove-Item $distNew -Recurse -Force }
+          if (Test-Path $distBak) { Remove-Item $distBak -Recurse -Force }
+
+          # Stage new dist, then swap atomically. Keep .bak for rollback.
+          Copy-Item $distSrc $distNew -Recurse -Force
+          if (Test-Path $distDst) { Move-Item $distDst $distBak -Force }
+          Move-Item $distNew $distDst -Force
+
+          # Render nginx site conf from template (forward slashes for nginx root)
+          $tmplPath = Join-Path $env:GITHUB_WORKSPACE 'frontend\nginx.template.conf'
+          if (-not (Test-Path $tmplPath)) { throw "nginx template missing: $tmplPath" }
+          $rootDir = $distDst -replace '\\','/'
+          $confText = Get-Content $tmplPath -Raw `
+            -replace '\{\{FRONTEND_PORT\}\}', $fePort `
+            -replace '\{\{BACKEND_PORT\}\}',  $bePort `
+            -replace '\{\{ROOT_DIR\}\}',      $rootDir
+          [System.IO.File]::WriteAllText($confPath, $confText)
+
+          # Validate before reloading; bail (and rollback) on syntax errors.
+          & $nginxExe -p "$env:NGINX_DIR\" -t
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "nginx -t failed — rolling back"
+            Remove-Item $confPath -Force -ErrorAction SilentlyContinue
+            if (Test-Path $distBak) {
+              Remove-Item $distDst -Recurse -Force
+              Move-Item $distBak $distDst -Force
+            }
+            throw "nginx config test failed"
           }
-          Write-Host "WSL -> Windows host IP: $winIp"
 
-          # Per-instance nginx.conf (backend port + host IP rewritten)
-          $nginxSrc = Get-Content (Join-Path $feDirWin 'nginx.conf') -Raw
-          $nginxOut = $nginxSrc `
-            -replace 'http://host\.docker\.internal:5151', "http://host.docker.internal:$bePort"
-          $nginxFile = Join-Path $feDirWin "nginx.$instance.conf"
-          [System.IO.File]::WriteAllText($nginxFile, $nginxOut)
-
-          # Generate a per-instance compose file (no custom YAML tags required).
-          $composeText = @"
-          services:
-            reporttool-ui:
-              build:
-                context: .
-                args:
-                  VITE_API_BASE: ""
-              image: $image
-              container_name: $cname
-              ports:
-                - "${fePort}:80"
-              extra_hosts:
-                - "host.docker.internal:$winIp"
-              volumes:
-                - ./nginx.$instance.conf:/etc/nginx/conf.d/default.conf:ro
-              restart: unless-stopped
-          "@
-          $composeWin = Join-Path $feDirWin "docker-compose.$instance.yml"
-          [System.IO.File]::WriteAllText($composeWin, $composeText)
-
-          & wsl -d $env:WSL_DISTRO -u $env:WSL_USER -- bash -lc "docker compose version"
-          if ($LASTEXITCODE -ne 0) { throw "docker compose is not available in WSL distro $env:WSL_DISTRO" }
-
-          $upCmd = "cd '$feDirWsl' && docker compose -p '$project' -f 'docker-compose.$instance.yml' up -d --build --force-recreate && docker compose -p '$project' -f 'docker-compose.$instance.yml' ps"
-          & wsl -d $env:WSL_DISTRO -u $env:WSL_USER -- bash -lc $upCmd
-          if ($LASTEXITCODE -ne 0) { throw "frontend docker compose failed" }
+          # Graceful reload (no dropped connections). Fall back to service restart
+          # if the signal pipe is wedged (rare, but happens after a crash).
+          & $nginxExe -p "$env:NGINX_DIR\" -s reload
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "nginx -s reload failed, restarting service"
+            & $env:NSSM restart $env:NGINX_SVC
+          }
 
           $health = '${{ steps.cfg.outputs.frontend_health }}'
           $ok = $false
@@ -335,8 +396,19 @@ jobs:
               if ($r.StatusCode -eq 200) { $ok = $true; break }
             } catch { }
           }
-          if (-not $ok) { throw "frontend health failed ($health)" }
-          Write-Host "Frontend OK ($cname @ :$fePort)"
+          if (-not $ok) {
+            Write-Host "Frontend /health failed — rolling back dist + conf"
+            Remove-Item $confPath -Force -ErrorAction SilentlyContinue
+            if (Test-Path $distBak) {
+              Remove-Item $distDst -Recurse -Force
+              Move-Item $distBak $distDst -Force
+            }
+            & $nginxExe -p "$env:NGINX_DIR\" -s reload 2>$null
+            throw "frontend health failed ($health)"
+          }
+
+          if (Test-Path $distBak) { Remove-Item $distBak -Recurse -Force }
+          Write-Host "Frontend OK ($instance @ :$fePort)"
 
       - name: Summary
         if: always()
@@ -348,7 +420,8 @@ jobs:
           - first_time_install: ``${{ steps.cfg.outputs.first_install }}``
           - service: ``${{ steps.cfg.outputs.service_name }}``
           - install root: ``${{ steps.cfg.outputs.install_root }}``
+          - site dir: ``${{ steps.cfg.outputs.site_dir }}``
+          - nginx conf: ``${{ steps.cfg.outputs.nginx_conf }}``
           - backend:  ${{ steps.cfg.outputs.backend_health }}
           - frontend: ${{ steps.cfg.outputs.frontend_health }}
-          - container: ``${{ steps.cfg.outputs.container_name }}`` (project: ``${{ steps.cfg.outputs.compose_project }}``)
           "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
