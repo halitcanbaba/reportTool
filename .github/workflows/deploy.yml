@@ -254,7 +254,7 @@ frontend_health=http://127.0.0.1:$frontendPort/health
             Get-ChildItem $rel -Directory | Sort-Object LastWriteTime -Descending | Select-Object -Skip 5 | Remove-Item -Recurse -Force
           }
 
-      - name: Deploy frontend (WSL Docker)
+      - name: Deploy frontend (WSL Docker Compose)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -279,24 +279,32 @@ frontend_health=http://127.0.0.1:$frontendPort/health
           $nginxFile = Join-Path $feDirWin "nginx.$instance.conf"
           [System.IO.File]::WriteAllText($nginxFile, $nginxOut)
 
-          # docker-compose override
-          $override = @"
+          # Generate a per-instance compose file (no custom YAML tags required).
+          $composeText = @"
 services:
   reporttool-ui:
+    build:
+      context: .
+      args:
+        VITE_API_BASE: ""
     image: $image
     container_name: $cname
-    ports: !override
+    ports:
       - "${fePort}:80"
-    extra_hosts: !override
+    extra_hosts:
       - "host.docker.internal:$winIp"
     volumes:
       - ./nginx.$instance.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
 "@
-          $overrideFile = Join-Path $feDirWin 'docker-compose.override.yml'
-          [System.IO.File]::WriteAllText($overrideFile, $override)
+          $composeWin = Join-Path $feDirWin "docker-compose.$instance.yml"
+          [System.IO.File]::WriteAllText($composeWin, $composeText)
 
-          # Build & up
-          & wsl -d $env:WSL_DISTRO -u $env:WSL_USER -- bash -lc "cd '$feDirWsl' && docker compose -p '$project' up -d --build && docker compose -p '$project' ps"
+          & wsl -d $env:WSL_DISTRO -u $env:WSL_USER -- bash -lc "docker compose version"
+          if ($LASTEXITCODE -ne 0) { throw "docker compose is not available in WSL distro $env:WSL_DISTRO" }
+
+          $upCmd = "cd '$feDirWsl' && docker compose -p '$project' -f 'docker-compose.$instance.yml' up -d --build --force-recreate && docker compose -p '$project' -f 'docker-compose.$instance.yml' ps"
+          & wsl -d $env:WSL_DISTRO -u $env:WSL_USER -- bash -lc $upCmd
           if ($LASTEXITCODE -ne 0) { throw "frontend docker compose failed" }
 
           $health = '${{ steps.cfg.outputs.frontend_health }}'
