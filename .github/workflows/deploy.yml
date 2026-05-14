@@ -61,18 +61,18 @@ jobs:
           $frontendPort = 8080 + $offset
 
           @"
-instance=$instance
-install_root=$installRoot
-service_name=$serviceName
-compose_project=$composeProj
-image_tag=$imageTag
-container_name=$containerNm
-backend_port=$backendPort
-frontend_port=$frontendPort
-first_install=$($firstInstall.ToString().ToLower())
-backend_health=http://127.0.0.1:$backendPort/health
-frontend_health=http://127.0.0.1:$frontendPort/health
-"@ | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          instance=$instance
+          install_root=$installRoot
+          service_name=$serviceName
+          compose_project=$composeProj
+          image_tag=$imageTag
+          container_name=$containerNm
+          backend_port=$backendPort
+          frontend_port=$frontendPort
+          first_install=$($firstInstall.ToString().ToLower())
+          backend_health=http://127.0.0.1:$backendPort/health
+          frontend_health=http://127.0.0.1:$frontendPort/health
+          "@ | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
           Write-Host "instance=$instance  service=$serviceName  root=$installRoot  backend=$backendPort  frontend=$frontendPort  first=$firstInstall"
 
@@ -281,22 +281,22 @@ frontend_health=http://127.0.0.1:$frontendPort/health
 
           # Generate a per-instance compose file (no custom YAML tags required).
           $composeText = @"
-services:
-  reporttool-ui:
-    build:
-      context: .
-      args:
-        VITE_API_BASE: ""
-    image: $image
-    container_name: $cname
-    ports:
-      - "${fePort}:80"
-    extra_hosts:
-      - "host.docker.internal:$winIp"
-    volumes:
-      - ./nginx.$instance.conf:/etc/nginx/conf.d/default.conf:ro
-    restart: unless-stopped
-"@
+          services:
+            reporttool-ui:
+              build:
+                context: .
+                args:
+                  VITE_API_BASE: ""
+              image: $image
+              container_name: $cname
+              ports:
+                - "${fePort}:80"
+              extra_hosts:
+                - "host.docker.internal:$winIp"
+              volumes:
+                - ./nginx.$instance.conf:/etc/nginx/conf.d/default.conf:ro
+              restart: unless-stopped
+          "@
           $composeWin = Join-Path $feDirWin "docker-compose.$instance.yml"
           [System.IO.File]::WriteAllText($composeWin, $composeText)
 
@@ -324,12 +324,12 @@ services:
         shell: pwsh
         run: |
           @"
-## Deploy result
-- instance: ``${{ steps.cfg.outputs.instance }}``
-- first_time_install: ``${{ steps.cfg.outputs.first_install }}``
-- service: ``${{ steps.cfg.outputs.service_name }}``
-- install root: ``${{ steps.cfg.outputs.install_root }}``
-- backend:  ${{ steps.cfg.outputs.backend_health }}
-- frontend: ${{ steps.cfg.outputs.frontend_health }}
-- container: ``${{ steps.cfg.outputs.container_name }}`` (project: ``${{ steps.cfg.outputs.compose_project }}``)
-"@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+          ## Deploy result
+          - instance: ``${{ steps.cfg.outputs.instance }}``
+          - first_time_install: ``${{ steps.cfg.outputs.first_install }}``
+          - service: ``${{ steps.cfg.outputs.service_name }}``
+          - install root: ``${{ steps.cfg.outputs.install_root }}``
+          - backend:  ${{ steps.cfg.outputs.backend_health }}
+          - frontend: ${{ steps.cfg.outputs.frontend_health }}
+          - container: ``${{ steps.cfg.outputs.container_name }}`` (project: ``${{ steps.cfg.outputs.compose_project }}``)
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
