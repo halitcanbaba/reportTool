@@ -245,8 +245,8 @@ jobs:
             } catch { }
           }
           if (-not $ok) {
-            if ($first) { throw "first install: backend /health failed — check $root\data\nssm-err.log" }
-            Write-Host "Backend /health failed — rolling back"
+            if ($first) { throw "first install: backend /health failed - check $root\data\nssm-err.log" }
+            Write-Host "Backend /health failed - rolling back"
             & $nssm stop $svc 2>$null
             $bkExe = Join-Path $root "releases\$tag-prev\ReportTool.exe"
             if (Test-Path $bkExe) { Copy-Item $bkExe (Join-Path $root 'ReportTool.exe') -Force; & $nssm start $svc }
