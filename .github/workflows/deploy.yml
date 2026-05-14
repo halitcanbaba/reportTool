@@ -283,7 +283,12 @@ jobs:
           $feDirWsl  = "$repoWsl/frontend"
           $feDirWin  = Join-Path $env:GITHUB_WORKSPACE 'frontend'
 
-          $winIp = (& wsl -d $env:WSL_DISTRO -u $env:WSL_USER -- bash -lc 'ip route show default | awk ''{print $3}''' | Out-String).Trim()
+          $routeLine = (& wsl -d $env:WSL_DISTRO -u $env:WSL_USER -- bash -lc 'ip route show default' | Out-String).Trim()
+          if ($routeLine -match 'default\s+via\s+([0-9\.]+)') {
+            $winIp = $Matches[1]
+          } else {
+            throw "Cannot parse WSL gateway IP from route output: $routeLine"
+          }
           Write-Host "WSL -> Windows host IP: $winIp"
 
           # Per-instance nginx.conf (backend port + host IP rewritten)
