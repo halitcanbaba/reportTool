@@ -26,4 +26,15 @@ namespace Crypto
 
    std::string Base64Encode(const uint8_t* data, size_t len);
    std::vector<uint8_t> Base64Decode(const std::string& s);
+
+   //--- URL-safe base64 (no padding): used for session token cookies.
+   std::string Base64UrlEncode(const uint8_t* data, size_t len);
+
+   //--- Cryptographically secure random bytes (BCryptGenRandom).
+   std::vector<uint8_t> RandomBytes(size_t n);
+
+   //--- Password hashing (PBKDF2-HMAC-SHA256, 200k iterations).
+   //--- Stored format: "pbkdf2$<iter>$<salt_b64>$<hash_b64>".
+   std::string HashPassword(const std::string& plain);
+   bool        VerifyPassword(const std::string& plain, const std::string& stored);
 }

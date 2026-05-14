@@ -25,5 +25,6 @@ private:
    std::atomic<bool>                 m_running{false};
 
    void RegisterCors();
+   void RegisterAuthMiddleware();
    void RegisterRoutes();
 };

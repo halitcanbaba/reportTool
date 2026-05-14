@@ -104,8 +104,12 @@
     <ClInclude Include="api\ReadyMadeRoutes.h" />
     <ClInclude Include="api\ScheduleRoutes.h" />
     <ClInclude Include="api\SettingsRoutes.h" />
+    <ClInclude Include="api\AuthRoutes.h" />
+    <ClInclude Include="api\UserRoutes.h" />
+    <ClInclude Include="api\CurrentUser.h" />
     <ClInclude Include="core\TelegramClient.h" />
     <ClInclude Include="core\Scheduler.h" />
+    <ClInclude Include="core\SessionManager.h" />
     <ClInclude Include="api\JobRunner.h" />
     <ClInclude Include="third_party\httplib.h" />
     <ClInclude Include="third_party\json.hpp" />
@@ -140,8 +144,12 @@
     <ClCompile Include="api\ReadyMadeRoutes.cpp" />
     <ClCompile Include="api\ScheduleRoutes.cpp" />
     <ClCompile Include="api\SettingsRoutes.cpp" />
+    <ClCompile Include="api\AuthRoutes.cpp" />
+    <ClCompile Include="api\UserRoutes.cpp" />
+    <ClCompile Include="api\CurrentUser.cpp" />
     <ClCompile Include="core\TelegramClient.cpp" />
     <ClCompile Include="core\Scheduler.cpp" />
+    <ClCompile Include="core\SessionManager.cpp" />
     <ClCompile Include="api\JobRunner.cpp" />
     <ClCompile Include="third_party\sqlite3.c">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>

@@ -15,6 +15,7 @@
 #include "api/HttpServer.h"
 #include "api/JobRunner.h"
 #include "core/Scheduler.h"
+#include "core/SessionManager.h"
 #include "third_party/httplib.h"
 #include <filesystem>
 #include <fstream>
@@ -95,6 +96,30 @@ int main(int argc, char** argv)
       }
    }
 
+   //--- Password hashing self-test: ensure PBKDF2 round-trips before we accept
+   //--- any real credentials. Any failure here is fatal so we don't ship a
+   //--- broken auth flow silently.
+   {
+      const std::string test_pw = "self-test-" + std::to_string((int)time(nullptr));
+      const std::string hash = Crypto::HashPassword(test_pw);
+      if(hash.empty())
+      {
+         log->Error("Password self-test: HashPassword returned empty (PBKDF2 unavailable?)");
+         return 2;
+      }
+      if(!Crypto::VerifyPassword(test_pw, hash))
+      {
+         log->Error("Password self-test: VerifyPassword(plain, hash) returned false. hash=%s", hash.c_str());
+         return 2;
+      }
+      if(Crypto::VerifyPassword(test_pw + "x", hash))
+      {
+         log->Error("Password self-test: VerifyPassword accepted a wrong password.");
+         return 2;
+      }
+      log->Info("Password self-test OK (PBKDF2-HMAC-SHA256, hash len=%zu chars)", hash.size());
+   }
+
    //--- DB
    auto db = std::make_shared<SqliteDb>();
    {
@@ -121,6 +146,8 @@ int main(int argc, char** argv)
    ctx.jobs->Start();
    ctx.scheduler = std::make_shared<Scheduler>(&ctx);
    ctx.scheduler->Start();
+   ctx.sessions = std::make_shared<SessionManager>(&ctx);
+   ctx.sessions->Start();
 
    //--- HTTP server
    HttpServer srv(&ctx);
@@ -129,6 +156,7 @@ int main(int argc, char** argv)
    srv.Listen();
 
    log->Info("Shutting down ...");
+   if(ctx.sessions)  ctx.sessions->Stop();
    if(ctx.scheduler) ctx.scheduler->Stop();
    ctx.jobs->Stop();
    pool->Clear();

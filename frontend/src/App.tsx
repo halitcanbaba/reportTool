@@ -1,5 +1,10 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { Layout } from './components/Layout';
+import { RequireAuth } from './components/RequireAuth';
+import { RequireAdmin } from './components/RequireAdmin';
+import { LoginPage } from './pages/LoginPage';
+import { SetupPage } from './pages/SetupPage';
+import { ChangePasswordPage } from './pages/ChangePasswordPage';
 import { ManagerListPage } from './pages/ManagerListPage';
 import { ManagerEditPage } from './pages/ManagerEditPage';
 import { AccountFilterListPage } from './pages/AccountFilterListPage';
@@ -12,14 +17,35 @@ import { ReadyMadeListPage } from './pages/ReadyMadeListPage';
 import { ReadyMadeEditPage } from './pages/ReadyMadeEditPage';
 import { ScheduleListPage } from './pages/ScheduleListPage';
 import { ScheduleEditPage } from './pages/ScheduleEditPage';
+import { UserListPage } from './pages/UserListPage';
+import { UserEditPage } from './pages/UserEditPage';
 import { RunReportPage } from './pages/RunReportPage';
 import { ResultViewPage } from './pages/ResultViewPage';
 import { DownloadHistoryPage } from './pages/DownloadHistoryPage';
 
+//--- The Layout wrapper renders the sidebar; we render it INSIDE RequireAuth so
+//--- unauthenticated routes (/login, /setup) get a clean full-screen view.
+function AppShell() {
+  return (
+    <RequireAuth>
+      <Layout>
+        <Outlet />
+      </Layout>
+    </RequireAuth>
+  );
+}
+
+function AdminOnly() {
+  return <RequireAdmin><Outlet /></RequireAdmin>;
+}
+
 export default function App() {
   return (
-    <Layout>
-      <Routes>
+    <Routes>
+      <Route path="/setup" element={<SetupPage />} />
+      <Route path="/login" element={<LoginPage />} />
+
+      <Route element={<AppShell />}>
         <Route path="/" element={<Navigate to="/templates" replace />} />
         <Route path="/managers" element={<ManagerListPage />} />
         <Route path="/managers/new" element={<ManagerEditPage />} />
@@ -43,7 +69,14 @@ export default function App() {
         <Route path="/jobs/:id" element={<ResultViewPage />} />
         <Route path="/reports" element={<Navigate to="/templates" replace />} />
         <Route path="/history" element={<DownloadHistoryPage />} />
-      </Routes>
-    </Layout>
+        <Route path="/account/password" element={<ChangePasswordPage />} />
+
+        <Route element={<AdminOnly />}>
+          <Route path="/users" element={<UserListPage />} />
+          <Route path="/users/new" element={<UserEditPage />} />
+          <Route path="/users/:id/edit" element={<UserEditPage />} />
+        </Route>
+      </Route>
+    </Routes>
   );
 }

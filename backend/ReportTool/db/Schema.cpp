@@ -3,7 +3,7 @@
 
 namespace
 {
-   constexpr int kCurrentSchemaVersion = 5;
+   constexpr int kCurrentSchemaVersion = 6;
 
    //--- Tables that survive every version (managers, regex_filters,
    //--- daily_cache, deal_cache). These are idempotent.
@@ -253,6 +253,38 @@ namespace
       if(!db.Exec(kV5Tables, err)) return false;
       return WriteVersion(db, 5, err);
    }
+
+   //--- v6 tables: users, sessions. Auth/RBAC foundation.
+   const char* kV6Tables =
+      "CREATE TABLE IF NOT EXISTS users ("
+      "  id            INTEGER PRIMARY KEY AUTOINCREMENT,"
+      "  username      TEXT    NOT NULL UNIQUE,"
+      "  password_hash TEXT    NOT NULL,"
+      "  role          TEXT    NOT NULL DEFAULT 'viewer' CHECK(role IN ('admin','viewer')),"
+      "  active        INTEGER NOT NULL DEFAULT 1,"
+      "  created_at    INTEGER NOT NULL,"
+      "  updated_at    INTEGER NOT NULL,"
+      "  last_login_at INTEGER NOT NULL DEFAULT 0"
+      ");"
+
+      "CREATE TABLE IF NOT EXISTS sessions ("
+      "  token       TEXT    PRIMARY KEY,"
+      "  user_id     INTEGER NOT NULL,"
+      "  created_at  INTEGER NOT NULL,"
+      "  expires_at  INTEGER NOT NULL,"
+      "  remote_addr TEXT    NOT NULL DEFAULT '',"
+      "  user_agent  TEXT    NOT NULL DEFAULT '',"
+      "  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      ");"
+      "CREATE INDEX IF NOT EXISTS ix_sessions_expires ON sessions(expires_at);"
+      "CREATE INDEX IF NOT EXISTS ix_sessions_user    ON sessions(user_id);";
+
+   //--- v5 → v6: add users + sessions tables.
+   bool MigrateToV6(SqliteDb& db, std::string* err)
+   {
+      if(!db.Exec(kV6Tables, err)) return false;
+      return WriteVersion(db, 6, err);
+   }
 }
 
 bool Schema::Apply(SqliteDb& db, std::string* err)
@@ -271,6 +303,7 @@ bool Schema::Apply(SqliteDb& db, std::string* err)
       //--- can move it into kV2Tables when convenient.
       if(!db.Exec("ALTER TABLE account_filters ADD COLUMN user_predicate_json TEXT NOT NULL DEFAULT ''", err)) return false;
       if(!db.Exec(kV5Tables, err)) return false;
+      if(!db.Exec(kV6Tables, err)) return false;
       return WriteVersion(db, kCurrentSchemaVersion, err);
    }
    if(v < 2)
@@ -288,6 +321,10 @@ bool Schema::Apply(SqliteDb& db, std::string* err)
    if(v < 5)
    {
       if(!MigrateToV5(db, err)) return false;
+   }
+   if(v < 6)
+   {
+      if(!MigrateToV6(db, err)) return false;
    }
    //--- v >= current: no-op.
    return true;

@@ -85,6 +85,33 @@ namespace SettingsRepo
    void        Set(SqliteDb& db, const std::string& key, const std::string& value);
 }
 
+namespace UserRepo
+{
+   std::vector<User>           ListAll(SqliteDb& db);
+   std::optional<User>         Get(SqliteDb& db, int64_t id);
+   std::optional<User>         GetByUsername(SqliteDb& db, const std::string& username);
+   int64_t                     Insert(SqliteDb& db, User& u);
+   bool                        UpdateRoleActive(SqliteDb& db, int64_t id, const std::string& role, bool active);
+   bool                        UpdatePassword(SqliteDb& db, int64_t id, const std::string& password_hash);
+   bool                        UpdateLastLogin(SqliteDb& db, int64_t id, int64_t when);
+   bool                        Delete(SqliteDb& db, int64_t id);
+   int64_t                     Count(SqliteDb& db);
+   int64_t                     CountActiveAdmins(SqliteDb& db);
+}
+
+namespace SessionRepo
+{
+   bool                        Insert(SqliteDb& db, const Session& s);
+   std::optional<Session>      Get(SqliteDb& db, const std::string& token);
+   bool                        Touch(SqliteDb& db, const std::string& token, int64_t new_expires_at);
+   bool                        Delete(SqliteDb& db, const std::string& token);
+   int64_t                     DeleteByUser(SqliteDb& db, int64_t user_id);
+   //--- Drop all sessions for a user EXCEPT one (used on password change to
+   //--- keep the caller's own session alive while invalidating others).
+   int64_t                     DeleteByUserExcept(SqliteDb& db, int64_t user_id, const std::string& keep_token);
+   int64_t                     DeleteExpired(SqliteDb& db, int64_t now);
+}
+
 namespace JobRepo
 {
    int64_t Create(SqliteDb& db, JobRow& job);   // assigns id

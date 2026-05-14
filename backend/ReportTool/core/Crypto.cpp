@@ -179,3 +179,83 @@ std::vector<uint8_t> Crypto::Base64Decode(const std::string& s)
    }
    return out;
 }
+
+std::string Crypto::Base64UrlEncode(const uint8_t* data, size_t len)
+{
+   //--- Standard base64, then map +/ → -_ and strip padding (RFC 4648 §5).
+   std::string s = Base64Encode(data, len);
+   for(char& c : s) { if(c == '+') c = '-'; else if(c == '/') c = '_'; }
+   while(!s.empty() && s.back() == '=') s.pop_back();
+   return s;
+}
+
+std::vector<uint8_t> Crypto::RandomBytes(size_t n)
+{
+   std::vector<uint8_t> out(n);
+   if(n == 0) return out;
+   NTSTATUS s = BCryptGenRandom(nullptr, out.data(), (ULONG)n, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+   if(s != 0) return {};
+   return out;
+}
+
+namespace
+{
+   constexpr DWORD     kPbkdf2Iterations = 200000;
+   constexpr size_t    kPbkdf2SaltLen    = 16;
+   constexpr size_t    kPbkdf2HashLen    = 32;
+
+   bool Pbkdf2Sha256(const std::string& plain, const uint8_t* salt, size_t salt_len,
+                     DWORD iterations, size_t hash_len, std::vector<uint8_t>* out)
+   {
+      BCRYPT_ALG_HANDLE h = nullptr;
+      NTSTATUS s = BCryptOpenAlgorithmProvider(&h, BCRYPT_SHA256_ALGORITHM, nullptr,
+                                                BCRYPT_ALG_HANDLE_HMAC_FLAG);
+      if(s != 0) return false;
+      out->assign(hash_len, 0);
+      s = BCryptDeriveKeyPBKDF2(h,
+                                 (PUCHAR)plain.data(), (ULONG)plain.size(),
+                                 (PUCHAR)salt,        (ULONG)salt_len,
+                                 (ULONGLONG)iterations,
+                                 out->data(), (ULONG)hash_len, 0);
+      BCryptCloseAlgorithmProvider(h, 0);
+      return s == 0;
+   }
+
+   //--- Constant-time bytewise compare (avoids timing leaks on hash compare).
+   bool ConstTimeEq(const uint8_t* a, const uint8_t* b, size_t n)
+   {
+      uint8_t v = 0;
+      for(size_t i = 0; i < n; ++i) v |= (uint8_t)(a[i] ^ b[i]);
+      return v == 0;
+   }
+}
+
+std::string Crypto::HashPassword(const std::string& plain)
+{
+   auto salt = RandomBytes(kPbkdf2SaltLen);
+   if(salt.empty()) return "";
+   std::vector<uint8_t> hash;
+   if(!Pbkdf2Sha256(plain, salt.data(), salt.size(), kPbkdf2Iterations, kPbkdf2HashLen, &hash))
+      return "";
+   char head[32];
+   snprintf(head, sizeof(head), "pbkdf2$%u$", (unsigned)kPbkdf2Iterations);
+   return std::string(head)
+          + Base64Encode(salt.data(), salt.size()) + "$"
+          + Base64Encode(hash.data(), hash.size());
+}
+
+bool Crypto::VerifyPassword(const std::string& plain, const std::string& stored)
+{
+   //--- Parse "pbkdf2$<iter>$<salt_b64>$<hash_b64>"
+   if(stored.compare(0, 7, "pbkdf2$") != 0) return false;
+   const size_t p1 = stored.find('$', 7);                if(p1 == std::string::npos) return false;
+   const size_t p2 = stored.find('$', p1 + 1);           if(p2 == std::string::npos) return false;
+   const DWORD iter = (DWORD)std::strtoul(stored.c_str() + 7, nullptr, 10);
+   if(iter == 0 || iter > 10000000u) return false;
+   const auto salt    = Base64Decode(stored.substr(p1 + 1, p2 - p1 - 1));
+   const auto expect  = Base64Decode(stored.substr(p2 + 1));
+   if(salt.empty() || expect.empty()) return false;
+   std::vector<uint8_t> got;
+   if(!Pbkdf2Sha256(plain, salt.data(), salt.size(), iter, expect.size(), &got)) return false;
+   return ConstTimeEq(got.data(), expect.data(), expect.size());
+}

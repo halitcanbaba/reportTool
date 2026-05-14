@@ -507,6 +507,31 @@ struct AppSetting
    std::string value;
 };
 
+//--- Application user with role (users table).
+//--- password_hash is PBKDF2-HMAC-SHA256 "pbkdf2$<iter>$<salt_b64>$<hash_b64>".
+struct User
+{
+   int64_t      id            = 0;
+   std::string  username;
+   std::string  password_hash;
+   std::string  role;                       // "admin" | "viewer"
+   bool         active        = true;
+   int64_t      created_at    = 0;
+   int64_t      updated_at    = 0;
+   int64_t      last_login_at = 0;
+};
+
+//--- Active HTTP session bound to a user (sessions table).
+struct Session
+{
+   std::string  token;
+   int64_t      user_id     = 0;
+   int64_t      created_at  = 0;
+   int64_t      expires_at  = 0;
+   std::string  remote_addr;
+   std::string  user_agent;
+};
+
 struct JobRow
 {
    int64_t      id                 = 0;

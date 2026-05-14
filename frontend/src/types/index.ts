@@ -1,3 +1,24 @@
+//--- Auth & users ------------------------------------------------
+
+export type UserRole = 'admin' | 'viewer';
+
+export type AppUser = {
+  id:            number;
+  username:      string;
+  role:          UserRole;
+  active:        boolean;
+  created_at:    number;
+  updated_at:    number;
+  last_login_at: number;
+};
+
+export type LoginRequest = { username: string; password: string };
+export type SetupRequest = { username: string; password: string };
+export type SetupStatus  = { needs_setup: boolean };
+
+export type UserCreateInput = { username: string; password: string; role: UserRole; active?: boolean };
+export type UserPatchInput  = { role?: UserRole; active?: boolean };
+
 export type RegexFilters = {
   deposit:    string[];
   withdrawal: string[];

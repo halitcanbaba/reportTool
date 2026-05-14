@@ -1,6 +1,7 @@
-import { NavLink } from 'react-router-dom';
+import { Link, NavLink, useNavigate } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 
-const items = [
+const baseItems = [
   { to: '/managers',        label: 'Managers' },
   { to: '/account-filters', label: 'Account Filters' },
   { to: '/blueprints',      label: 'Blueprints' },
@@ -11,12 +12,25 @@ const items = [
 ];
 
 export function Sidebar() {
+  const { user, logout } = useAuth();
+  const nav = useNavigate();
+
+  const items = user?.role === 'admin'
+    ? [...baseItems, { to: '/users', label: 'Users' }]
+    : baseItems;
+
+  const onLogout = async () => {
+    await logout();
+    nav('/login', { replace: true });
+  };
+
   return (
     <aside className="w-60 shrink-0 bg-ink-900 text-ink-50 flex flex-col">
       <div className="px-6 py-6 border-b border-ink-800">
         <div className="font-mono text-lg tracking-tight">MT5 ReportTool</div>
         <div className="text-xs text-ink-400 mt-1">v2.0.0</div>
       </div>
+
       <nav className="flex-1 py-4">
         {items.map(it => (
           <NavLink
@@ -32,8 +46,26 @@ export function Sidebar() {
           </NavLink>
         ))}
       </nav>
-      <div className="px-6 py-4 text-xs text-ink-500 border-t border-ink-800">
-        backend → {import.meta.env.VITE_API_BASE || '(nginx proxy)'}
+
+      <div className="px-6 py-4 border-t border-ink-800 space-y-2">
+        {user ? (
+          <>
+            <div className="flex items-center gap-2">
+              <div className="font-mono text-sm text-ink-100 truncate" title={user.username}>{user.username}</div>
+              <span className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border ${
+                user.role === 'admin'
+                  ? 'border-blue-700 text-blue-200 bg-blue-900/40'
+                  : 'border-ink-700 text-ink-300 bg-ink-800/60'
+              }`}>{user.role}</span>
+            </div>
+            <div className="flex items-center gap-3 text-xs">
+              <Link to="/account/password" className="text-ink-400 hover:text-white">Change password</Link>
+              <button onClick={onLogout} className="text-ink-400 hover:text-white">Logout</button>
+            </div>
+          </>
+        ) : (
+          <div className="text-xs text-ink-500">Not signed in</div>
+        )}
       </div>
     </aside>
   );

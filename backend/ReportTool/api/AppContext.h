@@ -12,6 +12,7 @@
 
 class JobRunner;
 class Scheduler;
+class SessionManager;
 
 struct ServerConfig
 {
@@ -34,4 +35,5 @@ struct AppContext
    std::shared_ptr<ThreadPool>        threads;
    std::shared_ptr<JobRunner>         jobs;
    std::shared_ptr<Scheduler>         scheduler;
+   std::shared_ptr<SessionManager>    sessions;
 };

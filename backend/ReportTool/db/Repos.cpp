@@ -1090,3 +1090,222 @@ void SettingsRepo::Set(SqliteDb& db, const std::string& key, const std::string& 
    st.BindText(2, value);
    st.Step();
 }
+
+//+--------------------- UserRepo ----------------------------------+
+
+namespace
+{
+   const char* kUserCols =
+      "id,username,password_hash,role,active,created_at,updated_at,last_login_at";
+
+   void FillUser(SqliteStmt& st, User& u)
+   {
+      u.id            = st.ColI64(0);
+      u.username      = st.ColText(1);
+      u.password_hash = st.ColText(2);
+      u.role          = st.ColText(3);
+      u.active        = st.ColInt(4) != 0;
+      u.created_at    = st.ColI64(5);
+      u.updated_at    = st.ColI64(6);
+      u.last_login_at = st.ColI64(7);
+   }
+}
+
+std::vector<User> UserRepo::ListAll(SqliteDb& db)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   std::vector<User> out;
+   SqliteStmt st(db, std::string("SELECT ") + kUserCols + " FROM users ORDER BY id");
+   while(st.Step()) { User u; FillUser(st, u); out.push_back(std::move(u)); }
+   return out;
+}
+
+std::optional<User> UserRepo::Get(SqliteDb& db, int64_t id)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   SqliteStmt st(db, std::string("SELECT ") + kUserCols + " FROM users WHERE id=?");
+   st.BindI64(1, id);
+   if(!st.Step()) return std::nullopt;
+   User u; FillUser(st, u);
+   return u;
+}
+
+std::optional<User> UserRepo::GetByUsername(SqliteDb& db, const std::string& username)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   SqliteStmt st(db, std::string("SELECT ") + kUserCols + " FROM users WHERE username=?");
+   st.BindText(1, username);
+   if(!st.Step()) return std::nullopt;
+   User u; FillUser(st, u);
+   return u;
+}
+
+int64_t UserRepo::Insert(SqliteDb& db, User& u)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   const int64_t now = (int64_t)time(nullptr);
+   SqliteStmt st(db,
+      "INSERT INTO users(username,password_hash,role,active,created_at,updated_at,last_login_at) "
+      "VALUES(?,?,?,?,?,?,0)");
+   st.BindText(1, u.username);
+   st.BindText(2, u.password_hash);
+   st.BindText(3, u.role.empty() ? "viewer" : u.role);
+   st.BindInt (4, u.active ? 1 : 0);
+   st.BindI64 (5, now);
+   st.BindI64 (6, now);
+   st.Step();
+   u.id = db.LastInsertRowid();
+   u.created_at = u.updated_at = now;
+   return u.id;
+}
+
+bool UserRepo::UpdateRoleActive(SqliteDb& db, int64_t id, const std::string& role, bool active)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   const int64_t now = (int64_t)time(nullptr);
+   SqliteStmt st(db, "UPDATE users SET role=?, active=?, updated_at=? WHERE id=?");
+   st.BindText(1, role);
+   st.BindInt (2, active ? 1 : 0);
+   st.BindI64 (3, now);
+   st.BindI64 (4, id);
+   st.Step();
+   return true;
+}
+
+bool UserRepo::UpdatePassword(SqliteDb& db, int64_t id, const std::string& password_hash)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   const int64_t now = (int64_t)time(nullptr);
+   SqliteStmt st(db, "UPDATE users SET password_hash=?, updated_at=? WHERE id=?");
+   st.BindText(1, password_hash);
+   st.BindI64 (2, now);
+   st.BindI64 (3, id);
+   st.Step();
+   return true;
+}
+
+bool UserRepo::UpdateLastLogin(SqliteDb& db, int64_t id, int64_t when)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   SqliteStmt st(db, "UPDATE users SET last_login_at=? WHERE id=?");
+   st.BindI64(1, when);
+   st.BindI64(2, id);
+   st.Step();
+   return true;
+}
+
+bool UserRepo::Delete(SqliteDb& db, int64_t id)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   SqliteStmt st(db, "DELETE FROM users WHERE id=?");
+   st.BindI64(1, id);
+   st.Step();
+   return true;
+}
+
+int64_t UserRepo::Count(SqliteDb& db)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   SqliteStmt st(db, "SELECT COUNT(*) FROM users");
+   if(!st.Step()) return 0;
+   return st.ColI64(0);
+}
+
+int64_t UserRepo::CountActiveAdmins(SqliteDb& db)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   SqliteStmt st(db, "SELECT COUNT(*) FROM users WHERE role='admin' AND active=1");
+   if(!st.Step()) return 0;
+   return st.ColI64(0);
+}
+
+//+--------------------- SessionRepo -------------------------------+
+
+namespace
+{
+   const char* kSessionCols =
+      "token,user_id,created_at,expires_at,remote_addr,user_agent";
+
+   void FillSession(SqliteStmt& st, Session& s)
+   {
+      s.token       = st.ColText(0);
+      s.user_id     = st.ColI64(1);
+      s.created_at  = st.ColI64(2);
+      s.expires_at  = st.ColI64(3);
+      s.remote_addr = st.ColText(4);
+      s.user_agent  = st.ColText(5);
+   }
+}
+
+bool SessionRepo::Insert(SqliteDb& db, const Session& s)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   SqliteStmt st(db,
+      "INSERT INTO sessions(token,user_id,created_at,expires_at,remote_addr,user_agent) "
+      "VALUES(?,?,?,?,?,?)");
+   st.BindText(1, s.token);
+   st.BindI64 (2, s.user_id);
+   st.BindI64 (3, s.created_at);
+   st.BindI64 (4, s.expires_at);
+   st.BindText(5, s.remote_addr);
+   st.BindText(6, s.user_agent);
+   st.Step();
+   return true;
+}
+
+std::optional<Session> SessionRepo::Get(SqliteDb& db, const std::string& token)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   SqliteStmt st(db, std::string("SELECT ") + kSessionCols + " FROM sessions WHERE token=?");
+   st.BindText(1, token);
+   if(!st.Step()) return std::nullopt;
+   Session s; FillSession(st, s);
+   return s;
+}
+
+bool SessionRepo::Touch(SqliteDb& db, const std::string& token, int64_t new_expires_at)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   SqliteStmt st(db, "UPDATE sessions SET expires_at=? WHERE token=?");
+   st.BindI64 (1, new_expires_at);
+   st.BindText(2, token);
+   st.Step();
+   return true;
+}
+
+bool SessionRepo::Delete(SqliteDb& db, const std::string& token)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   SqliteStmt st(db, "DELETE FROM sessions WHERE token=?");
+   st.BindText(1, token);
+   st.Step();
+   return true;
+}
+
+int64_t SessionRepo::DeleteByUser(SqliteDb& db, int64_t user_id)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   SqliteStmt st(db, "DELETE FROM sessions WHERE user_id=?");
+   st.BindI64(1, user_id);
+   st.Step();
+   return (int64_t)sqlite3_changes(db.Handle());
+}
+
+int64_t SessionRepo::DeleteByUserExcept(SqliteDb& db, int64_t user_id, const std::string& keep_token)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   SqliteStmt st(db, "DELETE FROM sessions WHERE user_id=? AND token<>?");
+   st.BindI64 (1, user_id);
+   st.BindText(2, keep_token);
+   st.Step();
+   return (int64_t)sqlite3_changes(db.Handle());
+}
+
+int64_t SessionRepo::DeleteExpired(SqliteDb& db, int64_t now)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   SqliteStmt st(db, "DELETE FROM sessions WHERE expires_at <= ?");
+   st.BindI64(1, now);
+   st.Step();
+   return (int64_t)sqlite3_changes(db.Handle());
+}
