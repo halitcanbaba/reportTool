@@ -213,7 +213,11 @@ jobs:
 
           if (-not (Test-Path $root)) { throw "Install root missing: $root (run with first_time_install)" }
 
-          & $nssm stop $svc 2>$null
+          try {
+            & $nssm stop $svc 2>$null | Out-Null
+          } catch {
+            Write-Host "NSSM stop skipped: $($_.Exception.Message)"
+          }
 
           # Backup existing exe (skip if first install)
           if (-not $first) {
@@ -247,7 +251,11 @@ jobs:
           if (-not $ok) {
             if ($first) { throw "first install: backend /health failed - check $root\data\nssm-err.log" }
             Write-Host "Backend /health failed - rolling back"
-            & $nssm stop $svc 2>$null
+            try {
+              & $nssm stop $svc 2>$null | Out-Null
+            } catch {
+              Write-Host "NSSM stop skipped during rollback: $($_.Exception.Message)"
+            }
             $bkExe = Join-Path $root "releases\$tag-prev\ReportTool.exe"
             if (Test-Path $bkExe) { Copy-Item $bkExe (Join-Path $root 'ReportTool.exe') -Force; & $nssm start $svc }
             throw "backend deploy rolled back"
