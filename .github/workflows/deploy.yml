@@ -20,7 +20,7 @@ on:
         default: '0'
 
 concurrency:
-  group: deploy-prod-${{ github.event_name == 'workflow_dispatch' && inputs.instance || 'default' }}
+  group: deploy-prod
   cancel-in-progress: false
 
 jobs:
