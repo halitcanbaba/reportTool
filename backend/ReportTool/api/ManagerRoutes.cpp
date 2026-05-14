@@ -159,13 +159,45 @@ void ManagerRoutes::Register(httplib::Server& srv, AppContext* ctx)
       res.set_content(R"({"deleted":true})", "application/json");
    });
 
+   srv.Get(R"(/api/managers/(\d+)/groups)", [ctx](const httplib::Request& req, httplib::Response& res){
+      const int64_t id = std::stoll(req.matches[1]);
+      auto m = ManagerRepo::Get(*ctx->db, id);
+      if(!m) { SendError(res, 404, "manager not found"); return; }
+      auto conn = ctx->pool->GetOrConnect(*m);
+      if(!conn) {
+         const std::string msg = "MT5 connect failed (server=" + m->server
+                                  + ", login=" + std::to_string(m->manager_login)
+                                  + "): " + Connection::LastErrorString();
+         SendError(res, 502, msg);
+         return;
+      }
+
+      //--- Enumerate distinct groups visible to this manager (wildcard mask "*").
+      std::vector<UserInfo> users;
+      try { users = DataLoader::LoadUsers(*conn, {"*"}, "", 0, 0, *ctx->log); }
+      catch(const std::exception& e) { SendError(res, 500, std::string("LoadUsers: ") + e.what()); return; }
+
+      std::vector<std::string> groups;
+      std::unordered_set<std::string> seen;
+      const size_t cap = 500;
+      for(const auto& u : users)
+      {
+         if(seen.size() >= cap) break;
+         if(seen.insert(u.group).second) groups.push_back(u.group);
+      }
+      std::sort(groups.begin(), groups.end());
+      res.set_content(json{ {"groups", groups} }.dump(), "application/json");
+   });
+
    srv.Post(R"(/api/managers/(\d+)/test)", [ctx](const httplib::Request& req, httplib::Response& res){
       const int64_t id = std::stoll(req.matches[1]);
       auto m = ManagerRepo::Get(*ctx->db, id);
       if(!m) { SendError(res, 404, "manager not found"); return; }
       auto conn = ctx->pool->GetOrConnect(*m);
       json j;
-      if(!conn) { j = { {"connected", false}, {"error", "connect failed"} }; res.set_content(j.dump(), "application/json"); return; }
+      if(!conn) { j = { {"connected", false}, {"error", Connection::LastErrorString()},
+                        {"server", m->server}, {"login", m->manager_login} };
+                  res.set_content(j.dump(), "application/json"); return; }
 
       //--- quick probe: pull a small users sample
       auto users = DataLoader::LoadUsers(*conn, m->group_masks, m->group_regex,

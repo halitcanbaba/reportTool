@@ -31,6 +31,7 @@ export const api = {
   base: API_BASE || '(same-origin)',
   get:   <T>(p: string)             => request<T>('GET',    p),
   post:  <T>(p: string, body: any)  => request<T>('POST',   p, body),
+  put:   <T>(p: string, body: any)  => request<T>('PUT',    p, body),
   patch: <T>(p: string, body: any)  => request<T>('PATCH',  p, body),
   del:   <T>(p: string)             => request<T>('DELETE', p),
 };

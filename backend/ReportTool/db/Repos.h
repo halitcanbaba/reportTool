@@ -15,9 +15,6 @@ namespace ManagerRepo
    std::vector<ManagerRow> ListAll(SqliteDb& db);
    std::optional<ManagerRow> Get(SqliteDb& db, int64_t id);
 
-   //--- on insert/update: row.password (plain) is encrypted before storage.
-   //--- regex_filters are written via RegexFilterRepo helper inside the same txn.
-   //--- Returns the assigned id (>0) on insert; same id on update.
    int64_t Insert(SqliteDb& db, ManagerRow& row);
    bool    Update(SqliteDb& db, ManagerRow& row, bool update_password);
    bool    Delete(SqliteDb& db, int64_t id);
@@ -25,11 +22,67 @@ namespace ManagerRepo
 
 namespace RegexFilterRepo
 {
-   //--- read all 4 categories for one manager.
    RegexFilters Get(SqliteDb& db, int64_t manager_id);
-
-   //--- replaces all filters for the manager (delete-then-insert in caller's txn).
    bool Replace(SqliteDb& db, int64_t manager_id, const RegexFilters& f);
+}
+
+namespace AccountFilterRepo
+{
+   std::vector<AccountFilter>  ListAll(SqliteDb& db);
+   std::optional<AccountFilter> Get(SqliteDb& db, int64_t id);
+   int64_t Insert(SqliteDb& db, AccountFilter& f);
+   bool    Update(SqliteDb& db, AccountFilter& f);
+   bool    Delete(SqliteDb& db, int64_t id);
+}
+
+namespace TemplateRepo
+{
+   std::vector<ReportTemplate>  ListAll(SqliteDb& db);
+   std::optional<ReportTemplate> Get(SqliteDb& db, int64_t id);
+   int64_t Insert(SqliteDb& db, ReportTemplate& t);
+   bool    Update(SqliteDb& db, ReportTemplate& t);
+   bool    Delete(SqliteDb& db, int64_t id);
+}
+
+namespace BlueprintRepo
+{
+   std::vector<FormulaBlueprint>  ListAll(SqliteDb& db);
+   std::optional<FormulaBlueprint> Get(SqliteDb& db, int64_t id);
+   int64_t Insert(SqliteDb& db, FormulaBlueprint& b);
+   bool    Update(SqliteDb& db, FormulaBlueprint& b);
+   bool    Delete(SqliteDb& db, int64_t id);
+}
+
+namespace ReadyMadeRepo
+{
+   std::vector<ReadyMadeReport>  ListAll(SqliteDb& db);
+   std::optional<ReadyMadeReport> Get(SqliteDb& db, int64_t id);
+   int64_t Insert(SqliteDb& db, ReadyMadeReport& r);
+   bool    Update(SqliteDb& db, ReadyMadeReport& r);
+   bool    Delete(SqliteDb& db, int64_t id);
+}
+
+namespace ScheduleRepo
+{
+   std::vector<ScheduleEntry>  ListAll(SqliteDb& db);
+   std::optional<ScheduleEntry> Get(SqliteDb& db, int64_t id);
+   int64_t Insert(SqliteDb& db, ScheduleEntry& s);
+   bool    Update(SqliteDb& db, ScheduleEntry& s);
+   bool    Delete(SqliteDb& db, int64_t id);
+
+   //--- Scheduler-side helpers
+   std::vector<ScheduleEntry> ListDue(SqliteDb& db, int64_t now);          // enabled && next_run_at <= now && last_status != 'dispatched'
+   std::vector<ScheduleEntry> ListDispatched(SqliteDb& db);                // last_status == 'dispatched'
+   bool UpdateDispatch(SqliteDb& db, int64_t id, int64_t last_run_at,
+                       int64_t next_run_at, int64_t last_job_id);
+   bool UpdateDelivery(SqliteDb& db, int64_t id, const std::string& status,
+                       const std::string& last_error);
+}
+
+namespace SettingsRepo
+{
+   std::string Get(SqliteDb& db, const std::string& key);
+   void        Set(SqliteDb& db, const std::string& key, const std::string& value);
 }
 
 namespace JobRepo
@@ -42,24 +95,19 @@ namespace JobRepo
    std::vector<JobRow>   List(SqliteDb& db, int limit);
    bool    Delete(SqliteDb& db, int64_t id);
 
-   //--- mark any 'running' or 'queued' rows as 'failed' on startup recovery.
    void    MarkInterruptedAsFailed(SqliteDb& db);
 }
 
 namespace CacheRepo
 {
-   //--- daily_cache reads / writes.
-   //--- ReadDaily returns map<login, vector<DailyRow sorted by day>> for sealed days only;
-   //--- caller refetches days that are not sealed yet.
+   //--- (currently not wired up — kept for v2.)
    std::unordered_map<uint64_t, std::vector<DailyRow>>
    ReadDaily(SqliteDb& db, int64_t manager_id, int64_t day_from, int64_t day_to_excl);
 
-   //--- upserts a batch (uses INSERT OR REPLACE).
    void WriteDaily(SqliteDb& db, int64_t manager_id,
                    const std::unordered_map<uint64_t, std::vector<DailyRow>>& rows,
                    int64_t now);
 
-   //--- balance/correction-only deal cache.
    std::unordered_map<uint64_t, std::vector<DealRow>>
    ReadDeals(SqliteDb& db, int64_t manager_id, int64_t time_from, int64_t time_to_excl);
 

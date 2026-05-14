@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ManagersAPI } from '../api/managers';
 import type { Manager, ManagerInput, RegexFilters } from '../types';
 import { RegexListEditor } from '../components/RegexListEditor';
+import { Breadcrumbs } from '../components/Breadcrumbs';
 
 const empty: ManagerInput = {
   name: '', brand: '', region: '',
@@ -59,8 +60,14 @@ export function ManagerEditPage() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-semibold text-ink-900">{editing ? 'Edit manager' : 'New manager'}</h1>
+      <div className="flex items-start justify-between mb-6">
+        <div>
+          <Breadcrumbs items={[
+            { label: 'Managers', to: '/managers' },
+            { label: editing ? 'Edit manager' : 'New manager' },
+          ]} />
+          <h1 className="text-2xl font-semibold text-ink-900">{editing ? 'Edit manager' : 'New manager'}</h1>
+        </div>
         <div className="flex gap-2">
           <button className="btn-secondary" onClick={() => nav('/managers')}>Cancel</button>
           <button className="btn-primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
@@ -122,12 +129,43 @@ export function ManagerEditPage() {
         </div>
 
         <div className="lg:col-span-2 space-y-4">
-          <div className="text-sm font-semibold text-ink-700 uppercase tracking-wide">Net deposit comment filters</div>
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-semibold text-ink-700 uppercase tracking-wide">Net deposit comment filters</div>
+            <div className="text-[11px] text-ink-500 italic">
+              Evaluation order (first match wins): Deposit → Withdrawal → Writeoff → Adjustment
+            </div>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <RegexListEditor label="Deposit"           hint="DEAL_BALANCE with profit > 0 matched here counts as deposit." value={form.regex_filters.deposit}    onChange={v => updateFilters('deposit', v)} />
-            <RegexListEditor label="Withdrawal"        hint="DEAL_BALANCE with profit < 0 matched here counts as withdrawal." value={form.regex_filters.withdrawal} onChange={v => updateFilters('withdrawal', v)} />
-            <RegexListEditor label="Balance writeoff"  hint="DEAL_BALANCE matched here goes to Balance Writeoff column."     value={form.regex_filters.writeoff}   onChange={v => updateFilters('writeoff', v)} />
-            <RegexListEditor label="Trade adjustment"  hint="DEAL_BALANCE matched here + DEAL_CORRECTION → Trade Adjustments." value={form.regex_filters.adjustment} onChange={v => updateFilters('adjustment', v)} />
+            <RegexListEditor
+              label="Deposit"
+              hint="DEAL_BALANCE with profit > 0 matched here counts as deposit."
+              value={form.regex_filters.deposit}
+              onChange={v => updateFilters('deposit', v)}
+              usedBy={['sum_deposit(F,T)', 'count_deposits(F,T)']}
+            />
+            <RegexListEditor
+              label="Withdrawal"
+              hint="DEAL_BALANCE with profit < 0 matched here counts as withdrawal."
+              value={form.regex_filters.withdrawal}
+              onChange={v => updateFilters('withdrawal', v)}
+              usedBy={['sum_withdrawal(F,T)', 'count_withdrawals(F,T)']}
+              extraNote="Result is kept negative (subtracted from net deposit)."
+            />
+            <RegexListEditor
+              label="Balance writeoff"
+              hint="DEAL_BALANCE matched here goes to Balance Writeoff column."
+              value={form.regex_filters.writeoff}
+              onChange={v => updateFilters('writeoff', v)}
+              usedBy={['sum_writeoff(F,T)']}
+            />
+            <RegexListEditor
+              label="Trade adjustment"
+              hint="DEAL_BALANCE matched here + DEAL_CORRECTION → Trade Adjustments."
+              value={form.regex_filters.adjustment}
+              onChange={v => updateFilters('adjustment', v)}
+              usedBy={['sum_adjustment(F,T)']}
+              extraNote="DEAL_CORRECTION deals are always classified as adjustments regardless of comment."
+            />
           </div>
         </div>
       </div>

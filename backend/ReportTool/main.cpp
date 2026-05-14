@@ -14,6 +14,7 @@
 #include "api/AppContext.h"
 #include "api/HttpServer.h"
 #include "api/JobRunner.h"
+#include "core/Scheduler.h"
 #include "third_party/httplib.h"
 #include <filesystem>
 #include <fstream>
@@ -118,6 +119,8 @@ int main(int argc, char** argv)
    ctx.threads = threads;
    ctx.jobs    = std::make_shared<JobRunner>(&ctx);
    ctx.jobs->Start();
+   ctx.scheduler = std::make_shared<Scheduler>(&ctx);
+   ctx.scheduler->Start();
 
    //--- HTTP server
    HttpServer srv(&ctx);
@@ -126,6 +129,7 @@ int main(int argc, char** argv)
    srv.Listen();
 
    log->Info("Shutting down ...");
+   if(ctx.scheduler) ctx.scheduler->Stop();
    ctx.jobs->Stop();
    pool->Clear();
    Connection::ShutdownFactory();

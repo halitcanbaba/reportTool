@@ -1,51 +1,59 @@
 # MT5 ReportTool
 
-Web-based reporting tool for MetaTrader 5 Manager API.
+Web-based **template-driven** reporting tool for MetaTrader 5 Manager API.
 
-Generates two reports:
-
-1. **Top Winner** — per-client winners over a date range
-   (Login, Deposit, Withdrawal, Net Deposit, Closed PL, Floating PL Change,
-   Balance Writeoff, Trade Adjustments, Net Equity, Company PL)
-2. **Summary** — monthly KPI block + per-day breakdown
-   (Date, Brand, Deposit, Withdrawal, Net Deposit, Closed PnL, Floating PnL Change,
-   Negative Equity Change, Today's Total Equity, New Accounts, Company PnL)
+You design report templates in the browser by composing formulas over MT5 fields
+(EOD equity, deal aggregations, open positions, etc.), then run each template
+against any manager / date range / saved account filter — over and over.
 
 ## Architecture
 
-| Layer | Tech | Where |
-|-------|------|-------|
-| Backend | C++17 (cpp-httplib + nlohmann/json + sqlite3 + MT5 Manager API) | Windows host (`localhost:5151`) |
-| Storage | SQLite WAL + AES-256-GCM (BCrypt) for manager passwords | next to backend exe |
-| Frontend | React + Vite + Tailwind | Docker container (`localhost:8080`) |
+| Layer    | Tech | Where |
+|----------|------|-------|
+| Backend  | C++17 (cpp-httplib + nlohmann/json + sqlite3 + MT5 Manager API) | Windows host (`localhost:5151`) |
+| Storage  | SQLite WAL + AES-256-GCM (BCrypt) for manager passwords         | next to backend exe |
+| Frontend | React + Vite + Tailwind                                          | Docker container (`localhost:8080`) |
 
 The MT5 Manager API ships only as a Windows DLL, so the backend cannot run in a
 Linux container. The frontend container reaches the Windows backend via
 `host.docker.internal:5151`.
 
-## Repository layout
+## Concepts
 
-```
-reportTool/
-├── backend/                 (Windows C++)
-│   ├── ReportTool.sln
-│   ├── ReportTool/
-│   │   ├── core/            (Logger, TimeUtil, Records, CsvWriter, ThreadPool, Crypto, RegexCache)
-│   │   ├── mt5/             (Connection, ConnectionPool, DataLoader)
-│   │   ├── db/              (SqliteDb, Schema, Repos)
-│   │   ├── reports/         (Classifier, TopWinnerReport, SummaryReport, ReportWriter)
-│   │   ├── api/             (HttpServer, ManagerRoutes, ReportRoutes, JobRunner, AppContext)
-│   │   ├── third_party/     (httplib.h, json.hpp, sqlite3.{h,c} — fetched, not committed)
-│   │   └── main.cpp
-│   ├── config/server.json
-│   ├── scripts/fetch_deps.ps1
-│   └── data/                (created at runtime: sqlite, output/, run.log)
-└── frontend/                (Docker)
-    ├── Dockerfile
-    ├── docker-compose.yml
-    ├── nginx.conf
-    └── src/                 (React + TypeScript)
-```
+- **Manager** — an MT5 manager account: connection + base group/login filter + regex buckets for deposit/withdrawal/writeoff/adjustment classification.
+- **Account Filter** — a reusable preset of `group_masks`, `group_regex`, `login_min/max`. Can be bound to one manager or generic.
+- **Report Template** — design-time definition of a per-account report: ordered columns (identifier or formula), a sort spec, default Top N, and named **date params** (e.g. `date_from`, `date_to`).
+- **Formula** — an AST built in the visual designer from primitives:
+  - identifier text (login, group, …)
+  - per-account scalars (user_balance, acc_equity, …)
+  - daily snapshot start/end (`equity_start(date_from)`, `equity_end(date_to)`, …)
+  - range aggregations (`sum_deposit(date_from, date_to)`, `sum_closed_pl`, `sum_daily_balance`, …)
+  - open position / open order aggregations (`position_count`, `order_open_volume_initial_sum`, …)
+  - order history aggregations (`count_orders_filled(date_from, date_to)`, …)
+  - binary operators `+ − × ÷` and numeric literals.
+- **Run** — fill in date param values, optionally pick an account filter or override fields, and submit. Each run is a persisted Job with its CSV output and JSON preview.
+
+## Field surface (single source of truth)
+
+The backend exposes the field catalog at `GET /api/reports/fields`. Categories:
+
+| ID | Category                       | Source                        | Arity |
+|----|--------------------------------|-------------------------------|-------|
+| A  | Identity                       | IMTUser                       | 0     |
+| B  | User Static Numeric            | IMTUser                       | 0     |
+| C  | Live Account Snapshot          | IMTAccount                    | 0     |
+| D  | Daily Snapshot Start/End       | IMTDaily                      | 1     |
+| E  | Daily Δ Range Sums             | IMTDaily                      | 2     |
+| F  | Deal Aggregations              | IMTDeal + Classifier          | 2     |
+| G  | Open Positions                 | IMTPosition                   | 0     |
+| H  | Open Orders                    | IMTOrder (open)               | 0     |
+| I  | Order History                  | IMTOrder (history)            | 2     |
+
+Each field is annotated with `source` so the engine **lazy-fetches only the
+sources a template's AST references** — unused data is never pulled.
+
+`*_start(D)` returns the latest daily snapshot ≤ D − 1 day; `*_end(D)` returns
+the latest snapshot ≤ D. This mirrors the original Top Winner boundary math.
 
 ## Build & run — backend (Windows)
 
@@ -57,7 +65,6 @@ cd backend
 pwsh ./scripts/fetch_deps.ps1                          # one-time: pulls httplib, json, sqlite3
 msbuild ReportTool.sln /p:Configuration=Release /p:Platform=x64 /m
 
-# Generate a master key and set it
 $env:REPORTTOOL_MASTER_KEY = (-join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Max 256) }))
 echo $env:REPORTTOOL_MASTER_KEY     # save this somewhere safe!
 
@@ -67,6 +74,8 @@ copy ..\..\config\server.json .\config\server.json
 ```
 
 Backend listens on `0.0.0.0:5151`. Tail `data/run.log` for progress.
+On first start, schema is created at v2 (or migrated from v1; v1 job history is
+dropped since legacy reports are removed).
 
 ## Build & run — frontend (Docker)
 
@@ -74,78 +83,53 @@ Backend listens on `0.0.0.0:5151`. Tail `data/run.log` for progress.
 cd frontend
 docker compose up -d --build
 # UI -> http://localhost:8080
-# (forwards API calls to host.docker.internal:5151)
 ```
 
-If the frontend lives on a different machine than the backend, set
-`VITE_API_BASE` in `.env` (or as a build-arg) to the backend URL.
+If frontend and backend live on different machines, set `VITE_API_BASE` in
+`.env` or as a build-arg.
 
 ## API surface
 
-| Method | Path | Body / Query |
-|--------|------|--------------|
+| Method | Path | Notes |
+|--------|------|-------|
 | GET    | `/health` | — |
-| GET    | `/api/managers` | — |
-| GET    | `/api/managers/:id` | — |
-| POST   | `/api/managers` | `{ name, brand, region, server, manager_login, password, group_masks[], group_regex?, login_min?, login_max?, active, regex_filters: { deposit[], withdrawal[], writeoff[], adjustment[] } }` |
-| PATCH  | `/api/managers/:id` | partial of the above (omit `password` to keep current) |
-| DELETE | `/api/managers/:id` | — |
-| POST   | `/api/managers/:id/test` | live MT5 connect probe |
-| POST   | `/api/reports/top-winner` | `{ manager_id, date_from, date_to, top_n=20 }` |
-| POST   | `/api/reports/summary`    | `{ manager_id, month? \| date_from?+date_to? }` |
-| GET    | `/api/reports/jobs` | `?limit=50` |
-| GET    | `/api/reports/jobs/:id` | — |
-| GET    | `/api/reports/jobs/:id/download.csv`  | — |
-| GET    | `/api/reports/jobs/:id/download.xlsx` | — (only if XLSX enabled) |
-| DELETE | `/api/reports/jobs/:id` | — |
-
-## Computation rules (authoritative)
-
-For each `DealRow d`, mutually-exclusive precedence is
-`deposit > withdrawal > writeoff > adjustment`:
-
-- **Deposit**          = Σ `|profit|` where `action == DEAL_BALANCE` and `comment` matches a deposit regex
-- **Withdrawal**       = − Σ `|profit|` where `DEAL_BALANCE` and matches withdrawal regex (kept negative)
-- **Net Deposit**      = Deposit + Withdrawal
-- **Balance Writeoff** = Σ `profit` where `DEAL_BALANCE` and matches writeoff regex
-- **Trade Adjustments**= Σ `profit` where (`DEAL_BALANCE` and matches adjustment regex) OR `action == DEAL_CORRECTION`
-- **Closed PL**        = Σ `profit` for `action ∈ {DEAL_BUY, DEAL_SELL}`
-- **Floating PL Change** = `Daily.profit` at `(date_to − 1d)` − `Daily.profit` at `(date_from − 1d)`
-- **Net Equity**       = `Daily.profit_equity` at the latest snapshot in range
-- **Company PL**       = − (Closed PL + Floating PL Change + Net Deposit + Balance Writeoff + Trade Adjustments)
-
-Top Winner is sorted by `(Closed PL + Floating PL Change)` descending. Summary's
-monthly metrics are simple sums of the daily rows; Equity Change % uses
-yesterday's total equity as the denominator.
-
-## Optimization
-
-- 200-login batches × 120-day windows fanned out over a fixed-size thread pool
-  (default 8).
-- Per-connection mutex serializes SDK calls on a single `IMTManagerAPI*`
-  (parallelism still wins on aggregation + wire-pipelining).
-- SQLite WAL cache for sealed historical days/deals — re-running an identical
-  report is much faster.
-- Regex lists compiled once per request.
+| GET    | `/api/managers` | list |
+| GET/POST/PATCH/DELETE | `/api/managers[/:id]` | CRUD |
+| POST   | `/api/managers/:id/test` | live connect probe |
+| GET    | `/api/account-filters` | list |
+| GET/POST/PATCH/DELETE | `/api/account-filters[/:id]` | CRUD |
+| GET    | `/api/reports/fields` | catalog of fields (with metadata) |
+| GET    | `/api/templates` | list |
+| GET/POST/PATCH/DELETE | `/api/templates[/:id]` | CRUD |
+| POST   | `/api/templates/validate` | AST validation (no save) |
+| POST   | `/api/reports/run` | `{ template_id, manager_id, account_filter_id?, dates, top_n?, account_filter_override? }` |
+| GET    | `/api/reports/jobs?limit=` | list |
+| GET/DELETE | `/api/reports/jobs/:id` | single / delete |
+| GET    | `/api/reports/jobs/:id/download.csv` | UTF-8 BOM CSV |
 
 ## Verification (end-to-end)
 
-1. `curl http://localhost:5151/health` → ok.
-2. UI → New Manager → fill (Trive Invest / Indonesia / regex lists).
-3. Click Test → backend connects, returns user count.
-4. Reports → Top Winner → check first row's `Net Deposit = Deposit + Withdrawal`
-   and `Company PL = −(Closed PL + Floating PL Change + Net Deposit + Balance Writeoff + Trade Adjustments)`.
-5. Reports → Summary → check `Monthly Net Deposit = Σ daily Net Deposit`.
-6. Click Download CSV → file opens in Excel without prompts (UTF-8 BOM).
-7. Re-run identical report → second run finishes faster (cache hits in
-   `data/run.log`).
+1. Backend Release built and started; `data/run.log` shows `schema_version → 2`.
+2. Frontend: `docker compose up -d --build`, open `http://localhost:8080`.
+3. **Managers → New** — add an MT5 manager.
+4. **Account Filters → New** — e.g. *Indonesia Live* with `real\Indonesia\*`.
+5. **Templates → New** — design `Top Winner — Net Trading`:
+   - date params: `date_from, date_to`
+   - identifier columns: Login, Group
+   - formula columns:
+     - *Equity Change* = `equity_end(date_to) − equity_start(date_from)`
+     - *Net Deposits* = `sum_deposit(date_from, date_to) + sum_withdrawal(date_from, date_to)`
+     - *Trading P/L*  = Equity Change − Net Deposits  (reconstruct AST)
+   - sort: *Trading P/L* desc, default top N = 20
+6. **Templates → Run** — manager + Indonesia Live + dates → table + CSV.
+7. Re-run with a different date range or filter → same template, different cohort.
+8. `curl -X POST .../api/reports/top-winner` → 404 (removed; use `/run`).
 
 ## Risks / known limits
 
-- **No HTTP auth.** Bound to localhost only. If exposed on LAN, add a bearer token.
-- **XLSX is stretch** — only CSV is shipped in v1. Hand-rolled OOXML can be
-  added later behind a build flag.
-- **SDK thread-safety undocumented** — we serialize per-connection. Escalate to
-  multiple connections per manager if profiling shows wire saturation.
-- **Today is never sealed** — reports including today always refetch today's
-  rows; rerunning an hour later may yield slightly different numbers.
+- **No HTTP auth.** Bound to localhost only.
+- **Heavy daily payload.** The engine uses `DailyRequestByLogins` (heavy variant) so all daily fields populate; expect 3–5× network bytes vs `Light`.
+- **Currency normalization.** Different accounts may have different currencies; the engine sums in account-native units (no FX conversion in v1).
+- **`daily_cache` / `deal_cache`** SQLite tables exist but are not wired in v1.
+- **Per-day / aggregate row models** not implemented in v1 (schema reserves space).
+- **XLSX export** stretch; only CSV is shipped.

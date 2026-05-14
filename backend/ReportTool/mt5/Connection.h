@@ -35,6 +35,11 @@ public:
    //--- is undocumented; we serialize to be safe).
    std::mutex& CallMutex() { return m_call_mu; }
 
+   //--- last MTAPIRES from a Connect/InitFactory call (thread-shared static).
+   //--- Useful for diagnosing why GetOrConnect returned nullptr.
+   static MTAPIRES  LastError()         { return s_last_err; }
+   static std::string LastErrorString();
+
 private:
    IMTManagerAPI*               m_manager = nullptr;
    IMTAdminAPI*                 m_admin   = nullptr;
@@ -42,6 +47,7 @@ private:
 
    static CMTManagerAPIFactory  s_factory;
    static bool                  s_factory_init;
+   static MTAPIRES              s_last_err;
 
    static std::wstring ToWide(const std::string& s);
 };

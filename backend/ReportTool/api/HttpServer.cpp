@@ -8,6 +8,12 @@
 #include "ManagerRoutes.h"
 #include "ReportRoutes.h"
 #include "HealthRoutes.h"
+#include "TemplateRoutes.h"
+#include "AccountFilterRoutes.h"
+#include "BlueprintRoutes.h"
+#include "ReadyMadeRoutes.h"
+#include "ScheduleRoutes.h"
+#include "SettingsRoutes.h"
 
 HttpServer::HttpServer(AppContext* ctx)
    : m_ctx(ctx), m_srv(std::make_unique<httplib::Server>())
@@ -33,9 +39,15 @@ void HttpServer::RegisterCors()
 
 void HttpServer::RegisterRoutes()
 {
-   HealthRoutes  ::Register(*m_srv, m_ctx);
-   ManagerRoutes ::Register(*m_srv, m_ctx);
-   ReportRoutes  ::Register(*m_srv, m_ctx);
+   HealthRoutes        ::Register(*m_srv, m_ctx);
+   ManagerRoutes       ::Register(*m_srv, m_ctx);
+   AccountFilterRoutes ::Register(*m_srv, m_ctx);
+   BlueprintRoutes     ::Register(*m_srv, m_ctx);
+   TemplateRoutes      ::Register(*m_srv, m_ctx);
+   ReadyMadeRoutes     ::Register(*m_srv, m_ctx);
+   ScheduleRoutes      ::Register(*m_srv, m_ctx);
+   SettingsRoutes      ::Register(*m_srv, m_ctx);
+   ReportRoutes        ::Register(*m_srv, m_ctx);
 }
 
 bool HttpServer::Listen()

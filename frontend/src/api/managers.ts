@@ -8,4 +8,5 @@ export const ManagersAPI = {
   update:  (id: number, input: Partial<ManagerInput>)=> api.patch<Manager>(`/api/managers/${id}`, input),
   remove:  (id: number)                             => api.del<{ deleted: boolean }>(`/api/managers/${id}`),
   test:    (id: number)                             => api.post<{ connected: boolean; users_sample?: number; error?: string }>(`/api/managers/${id}/test`, {}),
+  groups:  (id: number)                             => api.get<{ groups: string[] }>(`/api/managers/${id}/groups`),
 };

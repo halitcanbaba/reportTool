@@ -2,12 +2,14 @@ import { useState } from 'react';
 import { isValidRegex, testRegex } from '../utils/regex';
 
 export function RegexListEditor({
-  label, value, onChange, hint,
+  label, value, onChange, hint, usedBy, extraNote,
 }: {
   label: string;
   value: string[];
   onChange: (next: string[]) => void;
   hint?: string;
+  usedBy?: string[];
+  extraNote?: string;
 }) {
   const [sample, setSample] = useState('');
 
@@ -63,6 +65,24 @@ export function RegexListEditor({
         <input className="input text-xs" value={sample} onChange={e => setSample(e.target.value)}
                placeholder="paste a real deal comment to test live ..." />
       </div>
+
+      {(usedBy && usedBy.length > 0) || extraNote ? (
+        <div className="mt-3 pt-3 border-t border-ink-100 text-xs space-y-1">
+          {usedBy && usedBy.length > 0 && (
+            <div className="text-ink-600">
+              <span className="text-ink-500">Used by formula field{usedBy.length > 1 ? 's' : ''}:</span>
+              {' '}
+              {usedBy.map((u, i) => (
+                <span key={u}>
+                  {i > 0 && ', '}
+                  <code className="font-mono text-emerald-700 bg-emerald-50 px-1 rounded">{u}</code>
+                </span>
+              ))}
+            </div>
+          )}
+          {extraNote && <div className="text-ink-500 italic">{extraNote}</div>}
+        </div>
+      ) : null}
     </div>
   );
 }

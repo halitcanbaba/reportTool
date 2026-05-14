@@ -1,9 +1,13 @@
 import { NavLink } from 'react-router-dom';
 
 const items = [
-  { to: '/managers', label: 'Managers' },
-  { to: '/reports',  label: 'Reports'  },
-  { to: '/history',  label: 'History'  },
+  { to: '/managers',        label: 'Managers' },
+  { to: '/account-filters', label: 'Account Filters' },
+  { to: '/blueprints',      label: 'Blueprints' },
+  { to: '/templates',       label: 'Templates' },
+  { to: '/ready-made',      label: 'Ready-made' },
+  { to: '/schedules',       label: 'Scheduler' },
+  { to: '/history',         label: 'History' },
 ];
 
 export function Sidebar() {
@@ -11,7 +15,7 @@ export function Sidebar() {
     <aside className="w-60 shrink-0 bg-ink-900 text-ink-50 flex flex-col">
       <div className="px-6 py-6 border-b border-ink-800">
         <div className="font-mono text-lg tracking-tight">MT5 ReportTool</div>
-        <div className="text-xs text-ink-400 mt-1">v1.0.0</div>
+        <div className="text-xs text-ink-400 mt-1">v2.0.0</div>
       </div>
       <nav className="flex-1 py-4">
         {items.map(it => (

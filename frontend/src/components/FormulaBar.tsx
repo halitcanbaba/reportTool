@@ -1,0 +1,292 @@
+import { useState } from 'react';
+import { useDroppable } from '@dnd-kit/core';
+import type { FieldCatalog, FieldDef, Predicate } from '../types';
+import type { Chip, ChipOp } from '../lib/exprChips';
+import { astToChips, newChipId } from '../lib/exprChips';
+import { FieldPicker } from './FieldPicker';
+import { PredicateEditor } from './PredicateEditor';
+import { BlueprintPicker } from './BlueprintPicker';
+
+type Props = {
+  chips: Chip[];
+  onChipsChange: (next: Chip[]) => void;
+  catalog: FieldCatalog;
+  dateParams: string[];
+  path: string;             // base drop-zone id, e.g. "col:0"
+};
+
+const numericOnly = (f: { return_type: string }) =>
+  f.return_type === 'money' || f.return_type === 'pct' ||
+  f.return_type === 'int'   || f.return_type === 'date';
+
+function makeFieldChip(f: FieldDef, dateParams: string[]): Chip {
+  return {
+    id: newChipId(),
+    kind: 'field',
+    name: f.name,
+    args:
+      f.arity === 1 ? [dateParams[0] ?? ''] :
+      f.arity === 2 ? [dateParams[0] ?? '', dateParams[1] ?? dateParams[0] ?? ''] :
+                      [],
+  };
+}
+
+export function FormulaBar({ chips, onChipsChange, catalog, dateParams, path }: Props) {
+  const insertAt = (idx: number, chip: Chip) => {
+    const next = chips.slice();
+    next.splice(idx, 0, chip);
+    onChipsChange(next);
+  };
+  const insertManyAt = (idx: number, items: Chip[]) => {
+    if (items.length === 0) return;
+    const next = chips.slice();
+    next.splice(idx, 0, ...items);
+    onChipsChange(next);
+  };
+  const replaceAt = (idx: number, chip: Chip) => {
+    const next = chips.slice();
+    next[idx] = chip;
+    onChipsChange(next);
+  };
+  const deleteAt = (idx: number) => {
+    const next = chips.slice();
+    next.splice(idx, 1);
+    onChipsChange(next);
+  };
+
+  return (
+    <div className="flex items-center flex-wrap gap-0.5 p-2 bg-white border border-ink-200 rounded min-h-[3rem]">
+      <InsertionSlot index={0} path={path} catalog={catalog} dateParams={dateParams}
+                     onInsert={(c) => insertAt(0, c)}
+                     onInsertMany={(cs) => insertManyAt(0, cs)} />
+      {chips.map((c, i) => (
+        <span key={c.id} className="flex items-center">
+          <ChipView chip={c} catalog={catalog} dateParams={dateParams}
+                    onChange={(next) => replaceAt(i, next)}
+                    onDelete={() => deleteAt(i)} />
+          <InsertionSlot index={i + 1} path={path} catalog={catalog} dateParams={dateParams}
+                         onInsert={(c2) => insertAt(i + 1, c2)}
+                         onInsertMany={(cs) => insertManyAt(i + 1, cs)} />
+        </span>
+      ))}
+      {chips.length === 0 && (
+        <span className="text-xs text-ink-400 ml-2">Click + to insert a field, number, operator, or parenthesis</span>
+      )}
+    </div>
+  );
+}
+
+//--- Insertion slot between chips: button + popover + drop target -----
+
+function InsertionSlot({ index, path, catalog, dateParams, onInsert, onInsertMany }: {
+  index: number;
+  path: string;
+  catalog: FieldCatalog;
+  dateParams: string[];
+  onInsert: (c: Chip) => void;
+  onInsertMany: (cs: Chip[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const dropId = `${path}:slot:${index}`;
+  const { setNodeRef, isOver } = useDroppable({ id: dropId });
+
+  return (
+    <span ref={setNodeRef} className="relative inline-flex">
+      <button type="button"
+              className={
+                'w-5 h-6 text-ink-400 hover:text-ink-700 hover:bg-ink-100 rounded text-xs ' +
+                (isOver ? 'bg-blue-200 text-blue-900 ring-2 ring-blue-400' : '')
+              }
+              title="insert here"
+              onClick={() => setOpen(o => !o)}>+</button>
+      {open && (
+        <span className="absolute z-30 top-7 left-0 bg-white border border-ink-200 rounded shadow-lg p-2 w-80 flex flex-col gap-2"
+              onMouseDown={e => e.stopPropagation()}>
+          <div className="flex items-center gap-1 flex-wrap">
+            <FieldPicker
+              catalog={catalog}
+              filter={numericOnly}
+              placeholder="+ field"
+              onPick={(f) => { onInsert(makeFieldChip(f, dateParams)); setOpen(false); }}
+            />
+            <button type="button" className="btn-secondary text-xs px-2 py-1"
+                    onClick={() => { onInsert({ id: newChipId(), kind: 'literal', value: 0 }); setOpen(false); }}>
+              123
+            </button>
+            {(['+','-','*','/'] as ChipOp[]).map(op => (
+              <button key={op} type="button" className="btn-secondary text-xs px-2 py-1 font-mono"
+                      onClick={() => { onInsert({ id: newChipId(), kind: 'op', op }); setOpen(false); }}>
+                {op === '*' ? '×' : op === '/' ? '÷' : op === '-' ? '−' : op}
+              </button>
+            ))}
+            <button type="button" className="btn-secondary text-xs px-2 py-1 font-mono"
+                    onClick={() => { onInsert({ id: newChipId(), kind: 'lparen' }); setOpen(false); }}>(</button>
+            <button type="button" className="btn-secondary text-xs px-2 py-1 font-mono"
+                    onClick={() => { onInsert({ id: newChipId(), kind: 'rparen' }); setOpen(false); }}>)</button>
+            <button type="button" className="text-xs text-ink-500 px-1 ml-auto" onClick={() => setOpen(false)}>esc</button>
+          </div>
+          <div className="border-t border-ink-100 pt-2">
+            <BlueprintPicker
+              templateDateParams={dateParams}
+              onInsert={(expr) => { onInsertMany(astToChips(expr)); setOpen(false); }}
+            />
+          </div>
+        </span>
+      )}
+    </span>
+  );
+}
+
+//--- Chip render -----------------------------------------------------
+
+function ChipView({ chip, catalog, dateParams, onChange, onDelete }: {
+  chip: Chip;
+  catalog: FieldCatalog;
+  dateParams: string[];
+  onChange: (next: Chip) => void;
+  onDelete: () => void;
+}) {
+  if (chip.kind === 'op') {
+    return (
+      <span className="inline-flex items-center px-1 py-1 rounded border border-amber-200 bg-amber-50 font-mono text-base text-amber-900">
+        <select className="bg-transparent border-none focus:ring-0 text-base px-1"
+                value={chip.op}
+                onChange={e => onChange({ ...chip, op: e.target.value as ChipOp })}>
+          <option value="+">+</option>
+          <option value="-">−</option>
+          <option value="*">×</option>
+          <option value="/">÷</option>
+        </select>
+        <DeleteX onClick={onDelete} />
+      </span>
+    );
+  }
+
+  if (chip.kind === 'lparen' || chip.kind === 'rparen') {
+    return (
+      <span className="inline-flex items-center px-2 py-1 rounded border border-ink-300 bg-ink-50 font-mono text-base text-ink-700">
+        {chip.kind === 'lparen' ? '(' : ')'}
+        <DeleteX onClick={onDelete} />
+      </span>
+    );
+  }
+
+  if (chip.kind === 'literal') {
+    return (
+      <span className="inline-flex items-center px-1 py-1 rounded border border-slate-300 bg-slate-50">
+        <span className="text-xs text-ink-500 font-mono mr-1">num</span>
+        <input className="w-20 text-sm border-none bg-transparent focus:ring-0 px-1 tabular-nums"
+               type="number" step="any" value={chip.value}
+               onChange={e => onChange({ ...chip, value: Number(e.target.value) })} />
+        <DeleteX onClick={onDelete} />
+      </span>
+    );
+  }
+
+  // field
+  const f = catalog.fields.find(x => x.name === chip.name);
+  return (
+    <FieldChipView chip={chip} field={f} catalog={catalog} dateParams={dateParams}
+                   onChange={onChange} onDelete={onDelete} />
+  );
+}
+
+function FieldChipView({ chip, field, catalog, dateParams, onChange, onDelete }: {
+  chip:       Extract<Chip, { kind: 'field' }>;
+  field?:     FieldDef;
+  catalog:    FieldCatalog;
+  dateParams: string[];
+  onChange:   (next: Chip) => void;
+  onDelete:   () => void;
+}) {
+  const [filterOpen, setFilterOpen] = useState(false);
+  const cmpCount = countCmps(chip.predicate);
+  const supportsFilter = !!(field?.supports_predicate);
+  const filterable = field
+    ? (catalog.filterable_by_source?.[field.source] ?? [])
+    : [];
+
+  const setPredicate = (p: Predicate | null) => {
+    const next = { ...chip };
+    if (p) next.predicate = p;
+    else   delete (next as any).predicate;
+    onChange(next);
+  };
+
+  return (
+    <span className="inline-flex items-center px-2 py-1 rounded border border-emerald-300 bg-emerald-50 relative">
+      <code className="font-mono text-xs text-emerald-900">{chip.name}</code>
+      {chip.args.length > 0 && (
+        <span className="text-xs text-emerald-700 ml-1 flex items-center gap-0.5">
+          (
+          {chip.args.map((arg, i) => (
+            <span key={i} className="flex items-center">
+              {i > 0 && <span>,</span>}
+              <select className="bg-transparent border border-emerald-200 rounded text-xs px-1 ml-0.5"
+                      value={arg}
+                      onChange={e => {
+                        const args = chip.args.slice();
+                        args[i] = e.target.value;
+                        onChange({ ...chip, args });
+                      }}>
+                {dateParams.length === 0 && <option value="">(no date params)</option>}
+                {dateParams.map(d => <option key={d} value={d}>{d}</option>)}
+              </select>
+            </span>
+          ))}
+          )
+        </span>
+      )}
+      {field && (
+        <span className="text-[10px] text-emerald-600 ml-1 font-mono select-none" title={field.label}>
+          {field.return_type}
+        </span>
+      )}
+      {supportsFilter && (
+        <button type="button"
+                className={
+                  'text-[11px] ml-1 px-1.5 py-0.5 rounded font-mono border ' +
+                  (cmpCount > 0
+                    ? 'bg-amber-100 border-amber-300 text-amber-900 hover:bg-amber-200'
+                    : 'bg-white border-emerald-300 text-emerald-700 hover:bg-emerald-100')
+                }
+                onClick={() => setFilterOpen(o => !o)}>
+          {cmpCount > 0 ? `▼ ${cmpCount}` : '+ filter'}
+        </button>
+      )}
+      <DeleteX onClick={onDelete} />
+
+      {filterOpen && field && (
+        <div className="absolute z-40 top-full left-0 mt-1 w-[520px] bg-white border border-ink-200 rounded shadow-lg p-3"
+             onMouseDown={e => e.stopPropagation()}>
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs font-semibold text-ink-700">Row filter for {chip.name}</div>
+            <button type="button" className="text-xs text-ink-500 hover:text-ink-900" onClick={() => setFilterOpen(false)}>close ×</button>
+          </div>
+          <PredicateEditor
+            source={field.source as any}
+            filterable={filterable}
+            predicate={chip.predicate ?? null}
+            onChange={setPredicate}
+          />
+        </div>
+      )}
+    </span>
+  );
+}
+
+function countCmps(p: Predicate | null | undefined): number {
+  if (!p) return 0;
+  if (p.kind === 'cmp') return 1;
+  if (p.kind === 'not') return countCmps(p.item);
+  return p.items.reduce((n, c) => n + countCmps(c), 0);
+}
+
+function DeleteX({ onClick }: { onClick: () => void }) {
+  return (
+    <button type="button"
+            className="text-red-500 hover:text-red-700 text-xs ml-1 px-0.5"
+            title="remove"
+            onClick={onClick}>×</button>
+  );
+}

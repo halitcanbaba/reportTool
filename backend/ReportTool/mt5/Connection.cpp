@@ -7,6 +7,35 @@
 
 CMTManagerAPIFactory Connection::s_factory;
 bool                 Connection::s_factory_init = false;
+MTAPIRES             Connection::s_last_err     = MT_RET_OK;
+
+std::string Connection::LastErrorString()
+{
+   //--- Map common MTAPIRES codes to friendly hints. Full list lives in
+   //--- the MT5 SDK; we surface the numeric code so unknown ones are still
+   //--- diagnosable.
+   const MTAPIRES r = s_last_err;
+   char buf[128];
+   const char* hint = "";
+   switch(r)
+   {
+      case MT_RET_OK:                 hint = "ok";                      break;
+      case MT_RET_OK_NONE:            hint = "ok-none";                 break;
+      case MT_RET_ERROR:              hint = "generic error";           break;
+      case MT_RET_ERR_PARAMS:         hint = "invalid parameters";      break;
+      case MT_RET_ERR_NETWORK:        hint = "network error";           break;
+      case MT_RET_ERR_NOTFOUND:       hint = "not found";               break;
+      case MT_RET_ERR_TIMEOUT:        hint = "timeout";                 break;
+      case MT_RET_ERR_NOTIMPLEMENT:   hint = "not implemented";         break;
+      case MT_RET_ERR_NOTSUPPORTED:   hint = "not supported";           break;
+      case MT_RET_ERR_CANCEL:         hint = "canceled";                break;
+      case MT_RET_ERR_PERMISSIONS:    hint = "access denied / auth";    break;
+      case MT_RET_ERR_CONNECTION:     hint = "connection error";        break;
+      default:                        hint = "see MT5 SDK MTAPIRES";    break;
+   }
+   snprintf(buf, sizeof(buf), "MTAPI code=%u (%s)", (unsigned)r, hint);
+   return buf;
+}
 
 bool Connection::InitFactory(const std::string& dll_dir, Logger& log)
 {
@@ -16,6 +45,7 @@ bool Connection::InitFactory(const std::string& dll_dir, Logger& log)
    MTAPIRES res = s_factory.Initialize(wpath.c_str());
    if(res != MT_RET_OK)
    {
+      s_last_err = res;
       log.Error("CMTManagerAPIFactory::Initialize failed: %u (path: %s)", res, dll_dir.c_str());
       return false;
    }
@@ -47,6 +77,7 @@ bool Connection::Connect(const std::string& server, uint64_t login,
    MTAPIRES res = s_factory.CreateManager(MTManagerAPIVersion, &m_manager);
    if(res != MT_RET_OK || !m_manager)
    {
+      s_last_err = res;
       log.Error("CreateManager failed: %u", res);
       return false;
    }
@@ -58,11 +89,13 @@ bool Connection::Connect(const std::string& server, uint64_t login,
                             L"", pump_mode, timeout_ms);
    if(res != MT_RET_OK)
    {
+      s_last_err = res;
       log.Error("Connect to %s (login=%llu) failed: %u", server.c_str(), login, res);
       m_manager->Release(); m_manager = nullptr;
       return false;
    }
 
+   s_last_err = MT_RET_OK;
    log.Info("Connected to %s as login %llu", server.c_str(), login);
    return true;
 }

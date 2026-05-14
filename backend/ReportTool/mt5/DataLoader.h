@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                              MT5 ReportTool      |
-//|     DataLoader.h - parallel fetch of users/deals/daily          |
+//|     DataLoader.h - parallel fetch of users/deals/daily/etc.     |
 //+------------------------------------------------------------------+
 #pragma once
 #include "../core/Records.h"
@@ -28,6 +28,12 @@ namespace DataLoader
                      const std::vector<uint64_t>& logins,
                      Logger& log);
 
+   //--- Bulk live account state (IMTAccount) via UserAccountRequestByLogins.
+   std::unordered_map<uint64_t, AccountInfo>
+   LoadAccountsByLogins(Connection& conn, ThreadPool& pool,
+                        const std::vector<uint64_t>& logins,
+                        Logger& log);
+
    //--- Parallel deal fetch: 200-login batches × 120-day windows fanned out
    //--- across the supplied thread pool. Each task takes the connection's
    //--- CallMutex() to serialize SDK calls.
@@ -37,7 +43,7 @@ namespace DataLoader
                      int64_t from, int64_t to,
                      Logger& log);
 
-   //--- Parallel daily fetch (light variant: smaller payload).
+   //--- Parallel daily fetch (heavy variant — populates the full DailyRow).
    std::unordered_map<uint64_t, std::vector<DailyRow>>
    LoadDailyParallel(Connection& conn, ThreadPool& pool,
                      const std::vector<uint64_t>& logins,
@@ -52,4 +58,23 @@ namespace DataLoader
                      const std::vector<int64_t>& target_times,
                      int margin_days,
                      Logger& log);
+
+   //--- Bulk currently-open positions (IMTPosition) via PositionRequestByLogins.
+   std::unordered_map<uint64_t, std::vector<PositionRow>>
+   LoadPositionsByLogins(Connection& conn, ThreadPool& pool,
+                         const std::vector<uint64_t>& logins,
+                         Logger& log);
+
+   //--- Bulk currently-working orders (IMTOrder open) via OrderRequestByLogins.
+   std::unordered_map<uint64_t, std::vector<OpenOrderRow>>
+   LoadOpenOrdersByLogins(Connection& conn, ThreadPool& pool,
+                          const std::vector<uint64_t>& logins,
+                          Logger& log);
+
+   //--- Parallel order history fetch: 200-login batches × 120-day windows.
+   std::unordered_map<uint64_t, std::vector<HistoryOrderRow>>
+   LoadOrderHistoryParallel(Connection& conn, ThreadPool& pool,
+                            const std::vector<uint64_t>& logins,
+                            int64_t from, int64_t to,
+                            Logger& log);
 }

@@ -43,12 +43,12 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalIncludeDirectories>C:\MetaTrader5SDK\Include;$(ProjectDir)third_party;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>WIN32;_CONSOLE;CPPHTTPLIB_OPENSSL_SUPPORT=0;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;_CONSOLE;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>bcrypt.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>bcrypt.lib;ws2_32.lib;winhttp.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>xcopy /y /d "C:\MetaTrader5SDK\Libs\MT5APIManager64.dll" "$(OutDir)"</Command>
@@ -88,14 +88,24 @@
     <ClInclude Include="db\Schema.h" />
     <ClInclude Include="db\Repos.h" />
     <ClInclude Include="reports\Classifier.h" />
-    <ClInclude Include="reports\TopWinnerReport.h" />
-    <ClInclude Include="reports\SummaryReport.h" />
-    <ClInclude Include="reports\ReportWriter.h" />
+    <ClInclude Include="reports\EvalContext.h" />
+    <ClInclude Include="reports\Expression.h" />
+    <ClInclude Include="reports\FieldCatalog.h" />
+    <ClInclude Include="reports\Engine.h" />
+    <ClInclude Include="reports\GenericWriter.h" />
     <ClInclude Include="api\AppContext.h" />
     <ClInclude Include="api\HttpServer.h" />
     <ClInclude Include="api\ManagerRoutes.h" />
     <ClInclude Include="api\ReportRoutes.h" />
     <ClInclude Include="api\HealthRoutes.h" />
+    <ClInclude Include="api\TemplateRoutes.h" />
+    <ClInclude Include="api\AccountFilterRoutes.h" />
+    <ClInclude Include="api\BlueprintRoutes.h" />
+    <ClInclude Include="api\ReadyMadeRoutes.h" />
+    <ClInclude Include="api\ScheduleRoutes.h" />
+    <ClInclude Include="api\SettingsRoutes.h" />
+    <ClInclude Include="core\TelegramClient.h" />
+    <ClInclude Include="core\Scheduler.h" />
     <ClInclude Include="api\JobRunner.h" />
     <ClInclude Include="third_party\httplib.h" />
     <ClInclude Include="third_party\json.hpp" />
@@ -116,13 +126,22 @@
     <ClCompile Include="db\Schema.cpp" />
     <ClCompile Include="db\Repos.cpp" />
     <ClCompile Include="reports\Classifier.cpp" />
-    <ClCompile Include="reports\TopWinnerReport.cpp" />
-    <ClCompile Include="reports\SummaryReport.cpp" />
-    <ClCompile Include="reports\ReportWriter.cpp" />
+    <ClCompile Include="reports\Expression.cpp" />
+    <ClCompile Include="reports\FieldCatalog.cpp" />
+    <ClCompile Include="reports\Engine.cpp" />
+    <ClCompile Include="reports\GenericWriter.cpp" />
     <ClCompile Include="api\HttpServer.cpp" />
     <ClCompile Include="api\ManagerRoutes.cpp" />
     <ClCompile Include="api\ReportRoutes.cpp" />
     <ClCompile Include="api\HealthRoutes.cpp" />
+    <ClCompile Include="api\TemplateRoutes.cpp" />
+    <ClCompile Include="api\AccountFilterRoutes.cpp" />
+    <ClCompile Include="api\BlueprintRoutes.cpp" />
+    <ClCompile Include="api\ReadyMadeRoutes.cpp" />
+    <ClCompile Include="api\ScheduleRoutes.cpp" />
+    <ClCompile Include="api\SettingsRoutes.cpp" />
+    <ClCompile Include="core\TelegramClient.cpp" />
+    <ClCompile Include="core\Scheduler.cpp" />
     <ClCompile Include="api\JobRunner.cpp" />
     <ClCompile Include="third_party\sqlite3.c">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>

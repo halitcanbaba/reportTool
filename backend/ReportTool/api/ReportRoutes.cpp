@@ -9,6 +9,7 @@
 #include "JobRunner.h"
 #include <fstream>
 #include <sstream>
+#include <unordered_map>
 
 using nlohmann::json;
 
@@ -16,23 +17,39 @@ namespace
 {
    void SendError(httplib::Response& res, int status, const std::string& msg)
    {
-      json j = { { "error", msg } };
-      res.status = status; res.set_content(j.dump(), "application/json");
+      res.status = status;
+      res.set_content(json{ {"error", msg} }.dump(), "application/json");
    }
 
-   json JobToJson(const JobRow& j, AppContext* ctx)
+   //--- Resolve template names for a job list (one extra lookup per unique template).
+   std::unordered_map<int64_t, std::string>
+   FetchTemplateNames(AppContext* ctx, const std::vector<JobRow>& jobs)
+   {
+      std::unordered_map<int64_t, std::string> names;
+      for(const auto& j : jobs) names[j.template_id] = "";
+      for(auto& kv : names)
+      {
+         auto t = TemplateRepo::Get(*ctx->db, kv.first);
+         if(t) kv.second = t->name;
+      }
+      return names;
+   }
+
+   json JobToJson(const JobRow& j, const std::string& template_name)
    {
       json out = {
-         { "id",            j.id },
-         { "manager_id",    j.manager_id },
-         { "kind",          ReportKindName(j.kind) },
-         { "params_json",   j.params_json },
-         { "status",        JobStatusName(j.status) },
-         { "progress",      j.progress },
-         { "error_message", j.error_message },
-         { "created_at",    j.created_at },
-         { "started_at",    j.started_at },
-         { "completed_at",  j.completed_at },
+         { "id",                j.id },
+         { "manager_id",        j.manager_id },
+         { "template_id",       j.template_id },
+         { "account_filter_id", j.account_filter_id ? json(j.account_filter_id) : json(nullptr) },
+         { "template_name",     template_name },
+         { "params_json",       j.params_json },
+         { "status",            JobStatusName(j.status) },
+         { "progress",          j.progress },
+         { "error_message",     j.error_message },
+         { "created_at",        j.created_at },
+         { "started_at",        j.started_at },
+         { "completed_at",      j.completed_at },
       };
       if(!j.csv_filename.empty())
          out["csv_url"]  = std::string("/api/reports/jobs/") + std::to_string(j.id) + "/download.csv";
@@ -49,36 +66,42 @@ namespace
 
 void ReportRoutes::Register(httplib::Server& srv, AppContext* ctx)
 {
-   srv.Post("/api/reports/top-winner", [ctx](const httplib::Request& req, httplib::Response& res){
+   //--- Run a template ----------------------------------------------
+   srv.Post("/api/reports/run", [ctx](const httplib::Request& req, httplib::Response& res){
       json j = json::parse(req.body, nullptr, false);
-      if(j.is_discarded() || !j.contains("manager_id")) { SendError(res, 400, "manager_id required"); return; }
+      if(j.is_discarded()) { SendError(res, 400, "invalid json"); return; }
+      if(!j.contains("template_id") || !j["template_id"].is_number_integer())
+         { SendError(res, 400, "template_id required"); return; }
+      if(!j.contains("manager_id") || !j["manager_id"].is_number_integer())
+         { SendError(res, 400, "manager_id required"); return; }
+
       JobRow row;
-      row.manager_id  = j["manager_id"].get<int64_t>();
-      row.kind        = ReportKind::TopWinner;
-      row.params_json = j.dump();
+      row.template_id      = j["template_id"].get<int64_t>();
+      row.manager_id       = j["manager_id"].get<int64_t>();
+      row.account_filter_id= j.contains("account_filter_id") && j["account_filter_id"].is_number_integer()
+                              ? j["account_filter_id"].get<int64_t>() : 0;
+      row.params_json      = j.dump();
+
+      //--- sanity: template exists?
+      auto t = TemplateRepo::Get(*ctx->db, row.template_id);
+      if(!t) { SendError(res, 404, "template not found"); return; }
+      auto m = ManagerRepo::Get(*ctx->db, row.manager_id);
+      if(!m) { SendError(res, 404, "manager not found"); return; }
+
       JobRepo::Create(*ctx->db, row);
       ctx->jobs->Enqueue(row.id);
-      res.set_content(json{{"job_id", row.id}, {"status", "queued"}}.dump(), "application/json");
+      res.set_content(json{ {"job_id", row.id}, {"status", "queued"} }.dump(), "application/json");
    });
 
-   srv.Post("/api/reports/summary", [ctx](const httplib::Request& req, httplib::Response& res){
-      json j = json::parse(req.body, nullptr, false);
-      if(j.is_discarded() || !j.contains("manager_id")) { SendError(res, 400, "manager_id required"); return; }
-      JobRow row;
-      row.manager_id  = j["manager_id"].get<int64_t>();
-      row.kind        = ReportKind::Summary;
-      row.params_json = j.dump();
-      JobRepo::Create(*ctx->db, row);
-      ctx->jobs->Enqueue(row.id);
-      res.set_content(json{{"job_id", row.id}, {"status", "queued"}}.dump(), "application/json");
-   });
-
+   //--- List / get / delete jobs ------------------------------------
    srv.Get("/api/reports/jobs", [ctx](const httplib::Request& req, httplib::Response& res){
       int limit = 50;
-      if(req.has_param("limit")) limit = std::max(1, std::min(500, std::stoi(req.get_param_value("limit"))));
+      if(req.has_param("limit"))
+         limit = std::max(1, std::min(500, std::stoi(req.get_param_value("limit"))));
       auto rows = JobRepo::List(*ctx->db, limit);
+      auto names = FetchTemplateNames(ctx, rows);
       json out = json::array();
-      for(const auto& j : rows) out.push_back(JobToJson(j, ctx));
+      for(const auto& j : rows) out.push_back(JobToJson(j, names[j.template_id]));
       res.set_content(out.dump(), "application/json");
    });
 
@@ -86,7 +109,9 @@ void ReportRoutes::Register(httplib::Server& srv, AppContext* ctx)
       const int64_t id = std::stoll(req.matches[1]);
       auto j = JobRepo::Get(*ctx->db, id);
       if(!j) { SendError(res, 404, "job not found"); return; }
-      res.set_content(JobToJson(*j, ctx).dump(), "application/json");
+      auto t = TemplateRepo::Get(*ctx->db, j->template_id);
+      const std::string name = t ? t->name : std::string();
+      res.set_content(JobToJson(*j, name).dump(), "application/json");
    });
 
    srv.Delete(R"(/api/reports/jobs/(\d+))", [ctx](const httplib::Request& req, httplib::Response& res){
@@ -95,6 +120,7 @@ void ReportRoutes::Register(httplib::Server& srv, AppContext* ctx)
       res.set_content(R"({"deleted":true})", "application/json");
    });
 
+   //--- File downloads ---------------------------------------------
    auto stream_file = [](httplib::Response& res, const std::string& path,
                          const std::string& mime, const std::string& download_name) {
       std::ifstream f(path, std::ios::binary);

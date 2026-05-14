@@ -1,8 +1,23 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { ReportsAPI } from '../api/reports';
 import { StatusPill } from '../components/StatusPill';
 import { fmtDateTime } from '../utils/format';
 import type { ReportJob } from '../types';
+
+function paramsSummary(j: ReportJob): string {
+  try {
+    const p = JSON.parse(j.params_json || '{}');
+    const parts: string[] = [];
+    if (p.dates && typeof p.dates === 'object') {
+      const ds = Object.entries(p.dates).map(([k, v]) => `${k}=${v}`).join(', ');
+      if (ds) parts.push(ds);
+    }
+    if (p.top_n) parts.push(`top=${p.top_n}`);
+    if (j.account_filter_id) parts.push(`filter#${j.account_filter_id}`);
+    return parts.join(' · ');
+  } catch { return ''; }
+}
 
 export function DownloadHistoryPage() {
   const [jobs, setJobs] = useState<ReportJob[]>([]);
@@ -38,7 +53,8 @@ export function DownloadHistoryPage() {
           <thead className="bg-ink-50 border-b border-ink-100">
             <tr>
               <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">#</th>
-              <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Kind</th>
+              <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Template</th>
+              <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Params</th>
               <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Status</th>
               <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Created</th>
               <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Completed</th>
@@ -47,19 +63,23 @@ export function DownloadHistoryPage() {
           </thead>
           <tbody>
             {jobs.length === 0 && (
-              <tr><td colSpan={6} className="px-4 py-12 text-center text-ink-400">No jobs yet.</td></tr>
+              <tr><td colSpan={7} className="px-4 py-12 text-center text-ink-400">No jobs yet.</td></tr>
             )}
             {jobs.map(j => (
               <tr key={j.id} className="border-b border-ink-50 last:border-0">
                 <td className="px-4 py-3 font-mono">#{j.id}</td>
-                <td className="px-4 py-3">{j.kind}</td>
+                <td className="px-4 py-3">
+                  <Link to={`/jobs/${j.id}`} className="font-medium hover:underline">
+                    {j.template_name || `template #${j.template_id}`}
+                  </Link>
+                </td>
+                <td className="px-4 py-3 text-xs text-ink-500 font-mono">{paramsSummary(j)}</td>
                 <td className="px-4 py-3"><StatusPill status={j.status} /></td>
                 <td className="px-4 py-3 text-xs text-ink-500">{fmtDateTime(j.created_at)}</td>
                 <td className="px-4 py-3 text-xs text-ink-500">{j.completed_at ? fmtDateTime(j.completed_at) : '—'}</td>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2 justify-end">
                     {j.csv_url  && <a className="btn-secondary text-xs px-2 py-1" href={ReportsAPI.csvUrl(j.id)}  download>CSV</a>}
-                    {j.xlsx_url && <a className="btn-secondary text-xs px-2 py-1" href={ReportsAPI.xlsxUrl(j.id)} download>XLSX</a>}
                     <button className="btn-secondary text-xs px-2 py-1 text-red-600 hover:bg-red-50" onClick={() => onDelete(j.id)}>Delete</button>
                   </div>
                 </td>
