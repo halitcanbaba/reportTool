@@ -88,6 +88,12 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
+      - name: Fetch backend dependencies
+        shell: powershell
+        run: |
+          Set-Location backend
+          .\scripts\fetch_deps.ps1
+
       - name: Build backend
         shell: powershell
         run: msbuild backend\ReportTool.sln /p:Configuration=Release /p:Platform=x64 /m /v:m
