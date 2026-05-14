@@ -37,7 +37,7 @@ jobs:
 
       - name: Resolve instance parameters
         id: cfg
-        shell: pwsh
+        shell: powershell
         run: |
           $instance = '${{ github.event.inputs.instance }}'
           if ([string]::IsNullOrWhiteSpace($instance)) { $instance = 'default' }
@@ -77,7 +77,7 @@ jobs:
           Write-Host "instance=$instance  service=$serviceName  root=$installRoot  backend=$backendPort  frontend=$frontendPort  first=$firstInstall"
 
       - name: Diagnostics
-        shell: pwsh
+        shell: powershell
         run: |
           whoami
           "MSBuild: $((Get-Command msbuild.exe -ErrorAction SilentlyContinue).Source)"
@@ -89,12 +89,12 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       - name: Build backend
-        shell: pwsh
+        shell: powershell
         run: msbuild backend\ReportTool.sln /p:Configuration=Release /p:Platform=x64 /m /v:m
 
       - name: Locate backend artifact
         id: art
-        shell: pwsh
+        shell: powershell
         run: |
           $cands = @(
             'backend\bin\Release\ReportTool.exe',
@@ -110,7 +110,7 @@ jobs:
 
       - name: Bootstrap install root (first_time_install only)
         if: steps.cfg.outputs.first_install == 'true'
-        shell: pwsh
+        shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $root = '${{ steps.cfg.outputs.install_root }}'
@@ -167,7 +167,7 @@ jobs:
 
       - name: Register / update nssm service
         if: steps.cfg.outputs.first_install == 'true'
-        shell: pwsh
+        shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $svc  = '${{ steps.cfg.outputs.service_name }}'
@@ -194,7 +194,7 @@ jobs:
           & $nssm set $svc ObjectName            LocalSystem
 
       - name: Deploy backend
-        shell: pwsh
+        shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $root  = '${{ steps.cfg.outputs.install_root }}'
@@ -255,7 +255,7 @@ jobs:
           }
 
       - name: Deploy frontend (WSL Docker Compose)
-        shell: pwsh
+        shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $instance  = '${{ steps.cfg.outputs.instance }}'
@@ -321,7 +321,7 @@ jobs:
 
       - name: Summary
         if: always()
-        shell: pwsh
+        shell: powershell
         run: |
           @"
           ## Deploy result
