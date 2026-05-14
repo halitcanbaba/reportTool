@@ -372,7 +372,7 @@ jobs:
           $tmplPath = Join-Path $env:GITHUB_WORKSPACE 'frontend\nginx.template.conf'
           if (-not (Test-Path $tmplPath)) { throw "nginx template missing: $tmplPath" }
           $rootDir = $distDst -replace '\\','/'
-          $confText = Get-Content $tmplPath -Raw `
+          $confText = (Get-Content $tmplPath -Raw) `
             -replace '\{\{FRONTEND_PORT\}\}', $fePort `
             -replace '\{\{BACKEND_PORT\}\}',  $bePort `
             -replace '\{\{ROOT_DIR\}\}',      $rootDir
