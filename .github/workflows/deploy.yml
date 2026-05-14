@@ -287,7 +287,14 @@ jobs:
             elseif  (Test-Path $env:MT5_DLL_SOURCE)  { Copy-Item $env:MT5_DLL_SOURCE $dllDest -Force }
           }
 
+          # NSSM exits 1 when the service is still SERVICE_START_PENDING after
+          # its internal wait (slow MT5 SDK init triggers this). The health
+          # check below is the real readiness signal, so swallow the code.
           & $nssm start $svc
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::warning ::nssm start exit=$LASTEXITCODE (likely SERVICE_START_PENDING); deferring to /health"
+            $global:LASTEXITCODE = 0
+          }
 
           $health = '${{ steps.cfg.outputs.backend_health }}'
           $ok = $false
@@ -307,7 +314,11 @@ jobs:
               Write-Host "NSSM stop skipped during rollback: $($_.Exception.Message)"
             }
             $bkExe = Join-Path $root "releases\$tag-prev\ReportTool.exe"
-            if (Test-Path $bkExe) { Copy-Item $bkExe (Join-Path $root 'ReportTool.exe') -Force; & $nssm start $svc }
+            if (Test-Path $bkExe) {
+              Copy-Item $bkExe (Join-Path $root 'ReportTool.exe') -Force
+              & $nssm start $svc
+              if ($LASTEXITCODE -ne 0) { $global:LASTEXITCODE = 0 }
+            }
             throw "backend deploy rolled back"
           }
           Write-Host "Backend OK ($svc): $tag @ $health"
@@ -385,6 +396,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             Write-Host "nginx -s reload failed, restarting service"
             & $env:NSSM restart $env:NGINX_SVC
+            # nssm restart can return non-zero on slow startup; health check below is the real signal
+            if ($LASTEXITCODE -ne 0) { $global:LASTEXITCODE = 0 }
           }
 
           $health = '${{ steps.cfg.outputs.frontend_health }}'
