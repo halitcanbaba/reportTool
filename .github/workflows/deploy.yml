@@ -1,0 +1,327 @@
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      instance:
+        description: 'Instance adı (müşteri kimliği). Boş bırakılırsa "default".'
+        required: false
+        default: 'default'
+      first_time_install:
+        description: 'İlk kurulum (install root + service oluştur, server.json render, backup atla)'
+        type: boolean
+        required: false
+        default: false
+      port_offset:
+        description: 'Port offset (backend=5151+N, frontend=8080+N). İlk kurulumda yeni müşteri için artır.'
+        required: false
+        default: '0'
+
+concurrency:
+  group: deploy-prod-${{ github.event.inputs.instance || 'default' }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, Windows, X64, production, reportTool]
+    env:
+      MT5_DLL_SOURCE: C:\MetaTrader5SDK\Libs\MT5APIManager64.dll
+      WSL_DISTRO:     Ubuntu-22.04
+      WSL_USER:       halit
+      NSSM:           C:\ReportTool\bin\nssm.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve instance parameters
+        id: cfg
+        shell: pwsh
+        run: |
+          $instance = '${{ github.event.inputs.instance }}'
+          if ([string]::IsNullOrWhiteSpace($instance)) { $instance = 'default' }
+          $instance = $instance.ToLower() -replace '[^a-z0-9_-]',''
+          if ([string]::IsNullOrWhiteSpace($instance)) { throw "instance name invalid" }
+
+          $offsetRaw = '${{ github.event.inputs.port_offset }}'
+          if ([string]::IsNullOrWhiteSpace($offsetRaw)) { $offsetRaw = '0' }
+          $offset = [int]$offsetRaw
+          if ($offset -lt 0 -or $offset -gt 900) { throw "port_offset out of range (0..900)" }
+
+          $firstInstall = '${{ github.event.inputs.first_time_install }}' -eq 'true'
+
+          $suffix       = if ($instance -eq 'default') { '' } else { "-$instance" }
+          $installRoot  = "C:\ReportTool$suffix"
+          $serviceName  = "ReportTool$suffix"
+          $composeProj  = "reporttool$suffix"
+          $imageTag     = "reporttool-ui:$instance"
+          $containerNm  = "reporttool-ui$suffix"
+          $backendPort  = 5151 + $offset
+          $frontendPort = 8080 + $offset
+
+          @"
+instance=$instance
+install_root=$installRoot
+service_name=$serviceName
+compose_project=$composeProj
+image_tag=$imageTag
+container_name=$containerNm
+backend_port=$backendPort
+frontend_port=$frontendPort
+first_install=$($firstInstall.ToString().ToLower())
+backend_health=http://127.0.0.1:$backendPort/health
+frontend_health=http://127.0.0.1:$frontendPort/health
+"@ | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          Write-Host "instance=$instance  service=$serviceName  root=$installRoot  backend=$backendPort  frontend=$frontendPort  first=$firstInstall"
+
+      - name: Diagnostics
+        shell: pwsh
+        run: |
+          whoami
+          "MSBuild: $((Get-Command msbuild.exe -ErrorAction SilentlyContinue).Source)"
+          "nssm:    $env:NSSM  exists=$(Test-Path $env:NSSM)"
+          "MT5 DLL: $env:MT5_DLL_SOURCE  exists=$(Test-Path $env:MT5_DLL_SOURCE)"
+          & wsl --list --verbose
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build backend
+        shell: pwsh
+        run: msbuild backend\ReportTool.sln /p:Configuration=Release /p:Platform=x64 /m /v:m
+
+      - name: Locate backend artifact
+        id: art
+        shell: pwsh
+        run: |
+          $cands = @(
+            'backend\bin\Release\ReportTool.exe',
+            'backend\x64\Release\ReportTool.exe',
+            'backend\ReportTool\bin\Release\ReportTool.exe',
+            'backend\ReportTool\x64\Release\ReportTool.exe'
+          )
+          $exe = $cands | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $exe) { throw "ReportTool.exe not found" }
+          "exe=$exe"      | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "exedir=$(Split-Path $exe)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Built: $exe"
+
+      - name: Bootstrap install root (first_time_install only)
+        if: steps.cfg.outputs.first_install == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = '${{ steps.cfg.outputs.install_root }}'
+          $port = [int]'${{ steps.cfg.outputs.backend_port }}'
+
+          if (-not (Test-Path $root)) { New-Item -ItemType Directory -Path $root -Force | Out-Null }
+          foreach ($sub in 'config','data','data\output','releases','bin') {
+            New-Item -ItemType Directory -Path (Join-Path $root $sub) -Force | Out-Null
+          }
+
+          # Lock ACL: Admins + SYSTEM only
+          $acl = Get-Acl $root
+          $acl.SetAccessRuleProtection($true,$false)
+          $acl.Access | ForEach-Object { $acl.RemoveAccessRule($_) | Out-Null }
+          $admins = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            'BUILTIN\Administrators','FullControl','ContainerInherit,ObjectInherit','None','Allow')
+          $system = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            'NT AUTHORITY\SYSTEM','FullControl','ContainerInherit,ObjectInherit','None','Allow')
+          $acl.AddAccessRule($admins); $acl.AddAccessRule($system)
+          Set-Acl $root $acl
+
+          # nssm binary (copy from default install)
+          $nssmSrc = 'C:\ReportTool\bin\nssm.exe'
+          $nssmDst = Join-Path $root 'bin\nssm.exe'
+          if (-not (Test-Path $nssmDst)) {
+            if (-not (Test-Path $nssmSrc)) { throw "nssm not found at $nssmSrc" }
+            Copy-Item $nssmSrc $nssmDst -Force
+          }
+
+          # Master key: reuse if exists else generate
+          $keyPath = Join-Path $root 'data\KEY.txt'
+          if (-not (Test-Path $keyPath)) {
+            $bytes = New-Object byte[] 32
+            [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+            $hex = -join ($bytes | ForEach-Object { $_.ToString('x2') })
+            [System.IO.File]::WriteAllText($keyPath, $hex)
+            Write-Host "::notice ::Generated new master key for instance '${{ steps.cfg.outputs.instance }}' at $keyPath  (BACK IT UP)"
+          } else {
+            Write-Host "Master key already present, reusing."
+          }
+          $masterKey = (Get-Content $keyPath -Raw).Trim()
+
+          # Render config\server.json from repo template, swap port + paths
+          $tmpl = 'backend\config\server.json'
+          if (-not (Test-Path $tmpl)) { throw "$tmpl missing in repo" }
+          $cfg = Get-Content $tmpl -Raw | ConvertFrom-Json
+          $cfg.port = $port
+          $cfg.host = '0.0.0.0'
+          $cfg.db_path    = 'data/reportTool.sqlite'
+          $cfg.output_dir = 'data/output'
+          $cfg.log_path   = 'data/run.log'
+          $cfg.dll_dir    = '.'
+          ($cfg | ConvertTo-Json -Depth 10) | Set-Content (Join-Path $root 'config\server.json') -Encoding utf8
+
+      - name: Register / update nssm service
+        if: steps.cfg.outputs.first_install == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $svc  = '${{ steps.cfg.outputs.service_name }}'
+          $root = '${{ steps.cfg.outputs.install_root }}'
+          $nssm = Join-Path $root 'bin\nssm.exe'
+          $exe  = Join-Path $root 'ReportTool.exe'
+          $key  = (Get-Content (Join-Path $root 'data\KEY.txt') -Raw).Trim()
+
+          $exists = (& sc.exe query $svc) 2>&1 | Out-String
+          if ($exists -notmatch 'SERVICE_NAME') {
+            & $nssm install $svc $exe 'config\server.json'
+          }
+          & $nssm set $svc AppDirectory          $root
+          & $nssm set $svc AppParameters         'config\server.json'
+          & $nssm set $svc AppStdout             (Join-Path $root 'data\nssm-out.log')
+          & $nssm set $svc AppStderr             (Join-Path $root 'data\nssm-err.log')
+          & $nssm set $svc AppRotateFiles        1
+          & $nssm set $svc AppRotateBytes        10485760
+          & $nssm set $svc AppEnvironmentExtra   "REPORTTOOL_MASTER_KEY=$key"
+          & $nssm set $svc Start                 SERVICE_AUTO_START
+          & $nssm set $svc AppExit Default       Restart
+          & $nssm set $svc AppRestartDelay       5000
+          & $nssm set $svc DisplayName           "ReportTool Backend (${{ steps.cfg.outputs.instance }})"
+          & $nssm set $svc ObjectName            LocalSystem
+
+      - name: Deploy backend
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root  = '${{ steps.cfg.outputs.install_root }}'
+          $svc   = '${{ steps.cfg.outputs.service_name }}'
+          $nssm  = Join-Path $root 'bin\nssm.exe'
+          $first = '${{ steps.cfg.outputs.first_install }}' -eq 'true'
+          $exeSrc = '${{ steps.art.outputs.exe }}'
+          $exeDir = '${{ steps.art.outputs.exedir }}'
+          $tag = "$(Get-Date -Format yyyyMMdd-HHmmss)-$($env:GITHUB_SHA.Substring(0,7))"
+
+          if (-not (Test-Path $root)) { throw "Install root missing: $root (run with first_time_install)" }
+
+          & $nssm stop $svc 2>$null
+
+          # Backup existing exe (skip if first install)
+          if (-not $first) {
+            $bk = Join-Path $root "releases\$tag-prev"
+            New-Item -ItemType Directory -Path $bk -Force | Out-Null
+            $cur = Join-Path $root 'ReportTool.exe'
+            if (Test-Path $cur) { Copy-Item $cur (Join-Path $bk 'ReportTool.exe') -Force }
+          }
+
+          Copy-Item $exeSrc (Join-Path $root 'ReportTool.exe') -Force
+
+          # MT5 DLL: prefer build-output sibling, else fallback to system-wide SDK
+          $dllDest = Join-Path $root 'MT5APIManager64.dll'
+          $dllBuild = Join-Path $exeDir 'MT5APIManager64.dll'
+          if (-not (Test-Path $dllDest)) {
+            if      (Test-Path $dllBuild)            { Copy-Item $dllBuild $dllDest -Force }
+            elseif  (Test-Path $env:MT5_DLL_SOURCE)  { Copy-Item $env:MT5_DLL_SOURCE $dllDest -Force }
+          }
+
+          & $nssm start $svc
+
+          $health = '${{ steps.cfg.outputs.backend_health }}'
+          $ok = $false
+          for ($i=0; $i -lt 20; $i++) {
+            Start-Sleep -Seconds 2
+            try {
+              $r = Invoke-WebRequest $health -UseBasicParsing -TimeoutSec 3
+              if ($r.StatusCode -eq 200) { $ok = $true; break }
+            } catch { }
+          }
+          if (-not $ok) {
+            if ($first) { throw "first install: backend /health failed — check $root\data\nssm-err.log" }
+            Write-Host "Backend /health failed — rolling back"
+            & $nssm stop $svc 2>$null
+            $bkExe = Join-Path $root "releases\$tag-prev\ReportTool.exe"
+            if (Test-Path $bkExe) { Copy-Item $bkExe (Join-Path $root 'ReportTool.exe') -Force; & $nssm start $svc }
+            throw "backend deploy rolled back"
+          }
+          Write-Host "Backend OK ($svc): $tag @ $health"
+
+          # Prune backups
+          $rel = Join-Path $root 'releases'
+          if (Test-Path $rel) {
+            Get-ChildItem $rel -Directory | Sort-Object LastWriteTime -Descending | Select-Object -Skip 5 | Remove-Item -Recurse -Force
+          }
+
+      - name: Deploy frontend (WSL Docker)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $instance  = '${{ steps.cfg.outputs.instance }}'
+          $project   = '${{ steps.cfg.outputs.compose_project }}'
+          $image     = '${{ steps.cfg.outputs.image_tag }}'
+          $cname     = '${{ steps.cfg.outputs.container_name }}'
+          $fePort    = [int]'${{ steps.cfg.outputs.frontend_port }}'
+          $bePort    = [int]'${{ steps.cfg.outputs.backend_port }}'
+
+          $repoWsl = ($env:GITHUB_WORKSPACE -replace '^C:','/mnt/c') -replace '\\','/'
+          $feDirWsl  = "$repoWsl/frontend"
+          $feDirWin  = Join-Path $env:GITHUB_WORKSPACE 'frontend'
+
+          $winIp = (& wsl -d $env:WSL_DISTRO -u $env:WSL_USER -- bash -lc "ip route show default | awk '{print `$3}'" | Out-String).Trim()
+          Write-Host "WSL -> Windows host IP: $winIp"
+
+          # Per-instance nginx.conf (backend port + host IP rewritten)
+          $nginxSrc = Get-Content (Join-Path $feDirWin 'nginx.conf') -Raw
+          $nginxOut = $nginxSrc `
+            -replace 'http://host\.docker\.internal:5151', "http://host.docker.internal:$bePort"
+          $nginxFile = Join-Path $feDirWin "nginx.$instance.conf"
+          [System.IO.File]::WriteAllText($nginxFile, $nginxOut)
+
+          # docker-compose override
+          $override = @"
+services:
+  reporttool-ui:
+    image: $image
+    container_name: $cname
+    ports: !override
+      - "${fePort}:80"
+    extra_hosts: !override
+      - "host.docker.internal:$winIp"
+    volumes:
+      - ./nginx.$instance.conf:/etc/nginx/conf.d/default.conf:ro
+"@
+          $overrideFile = Join-Path $feDirWin 'docker-compose.override.yml'
+          [System.IO.File]::WriteAllText($overrideFile, $override)
+
+          # Build & up
+          & wsl -d $env:WSL_DISTRO -u $env:WSL_USER -- bash -lc "cd '$feDirWsl' && docker compose -p '$project' up -d --build && docker compose -p '$project' ps"
+          if ($LASTEXITCODE -ne 0) { throw "frontend docker compose failed" }
+
+          $health = '${{ steps.cfg.outputs.frontend_health }}'
+          $ok = $false
+          for ($i=0; $i -lt 20; $i++) {
+            Start-Sleep -Seconds 2
+            try {
+              $r = Invoke-WebRequest $health -UseBasicParsing -TimeoutSec 3
+              if ($r.StatusCode -eq 200) { $ok = $true; break }
+            } catch { }
+          }
+          if (-not $ok) { throw "frontend health failed ($health)" }
+          Write-Host "Frontend OK ($cname @ :$fePort)"
+
+      - name: Summary
+        if: always()
+        shell: pwsh
+        run: |
+          @"
+## Deploy result
+- instance: ``${{ steps.cfg.outputs.instance }}``
+- first_time_install: ``${{ steps.cfg.outputs.first_install }}``
+- service: ``${{ steps.cfg.outputs.service_name }}``
+- install root: ``${{ steps.cfg.outputs.install_root }}``
+- backend:  ${{ steps.cfg.outputs.backend_health }}
+- frontend: ${{ steps.cfg.outputs.frontend_health }}
+- container: ``${{ steps.cfg.outputs.container_name }}`` (project: ``${{ steps.cfg.outputs.compose_project }}``)
+"@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
