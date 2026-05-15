@@ -10,6 +10,7 @@ export type DateParamMap = Record<string, string>;   // blueprint param → temp
 //--- (predicate values reference row fields, not template date params).
 export function remapExpr(node: ExprNode, mapping: DateParamMap): ExprNode {
   if (node.type === 'literal') return { ...node };
+  if (node.type === 'col_ref') return { ...node };
   if (node.type === 'field') {
     return {
       ...node,

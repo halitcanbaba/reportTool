@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useDroppable } from '@dnd-kit/core';
-import type { FieldCatalog, FieldDef, Predicate } from '../types';
+import type { Column, FieldCatalog, FieldDef, Predicate } from '../types';
 import type { Chip, ChipOp } from '../lib/exprChips';
 import { astToChips, newChipId } from '../lib/exprChips';
 import { FieldPicker } from './FieldPicker';
@@ -13,6 +13,7 @@ type Props = {
   catalog: FieldCatalog;
   dateParams: string[];
   path: string;             // base drop-zone id, e.g. "col:0"
+  refCandidates: Column[];  // previously-defined columns (numeric/formula) — pickable as @col_key refs
 };
 
 const numericOnly = (f: { return_type: string }) =>
@@ -31,7 +32,7 @@ function makeFieldChip(f: FieldDef, dateParams: string[]): Chip {
   };
 }
 
-export function FormulaBar({ chips, onChipsChange, catalog, dateParams, path }: Props) {
+export function FormulaBar({ chips, onChipsChange, catalog, dateParams, path, refCandidates }: Props) {
   const insertAt = (idx: number, chip: Chip) => {
     const next = chips.slice();
     next.splice(idx, 0, chip);
@@ -57,14 +58,17 @@ export function FormulaBar({ chips, onChipsChange, catalog, dateParams, path }: 
   return (
     <div className="flex items-center flex-wrap gap-0.5 p-2 bg-white border border-ink-200 rounded min-h-[3rem]">
       <InsertionSlot index={0} path={path} catalog={catalog} dateParams={dateParams}
+                     refCandidates={refCandidates}
                      onInsert={(c) => insertAt(0, c)}
                      onInsertMany={(cs) => insertManyAt(0, cs)} />
       {chips.map((c, i) => (
         <span key={c.id} className="flex items-center">
           <ChipView chip={c} catalog={catalog} dateParams={dateParams}
+                    refCandidates={refCandidates}
                     onChange={(next) => replaceAt(i, next)}
                     onDelete={() => deleteAt(i)} />
           <InsertionSlot index={i + 1} path={path} catalog={catalog} dateParams={dateParams}
+                         refCandidates={refCandidates}
                          onInsert={(c2) => insertAt(i + 1, c2)}
                          onInsertMany={(cs) => insertManyAt(i + 1, cs)} />
         </span>
@@ -78,11 +82,12 @@ export function FormulaBar({ chips, onChipsChange, catalog, dateParams, path }: 
 
 //--- Insertion slot between chips: button + popover + drop target -----
 
-function InsertionSlot({ index, path, catalog, dateParams, onInsert, onInsertMany }: {
+function InsertionSlot({ index, path, catalog, dateParams, refCandidates, onInsert, onInsertMany }: {
   index: number;
   path: string;
   catalog: FieldCatalog;
   dateParams: string[];
+  refCandidates: Column[];
   onInsert: (c: Chip) => void;
   onInsertMany: (cs: Chip[]) => void;
 }) {
@@ -125,6 +130,25 @@ function InsertionSlot({ index, path, catalog, dateParams, onInsert, onInsertMan
                     onClick={() => { onInsert({ id: newChipId(), kind: 'rparen' }); setOpen(false); }}>)</button>
             <button type="button" className="text-xs text-ink-500 px-1 ml-auto" onClick={() => setOpen(false)}>esc</button>
           </div>
+          {refCandidates.length > 0 && (
+            <div className="border-t border-ink-100 pt-2">
+              <div className="text-[10px] uppercase font-semibold text-ink-500 mb-1">Columns in this template</div>
+              <div className="max-h-40 overflow-auto -mx-1">
+                {refCandidates.map(col => (
+                  <button key={col.key} type="button"
+                          className="w-full text-left px-2 py-1 hover:bg-ink-50 flex items-center justify-between gap-2"
+                          title={`Insert reference to ${col.key}`}
+                          onClick={() => { onInsert({ id: newChipId(), kind: 'col_ref', key: col.key }); setOpen(false); }}>
+                    <span className="text-xs">
+                      <code className="font-mono text-violet-700">@{col.key}</code>
+                      <span className="ml-2 text-ink-500">{col.label}</span>
+                    </span>
+                    <span className="text-[10px] text-ink-400 font-mono">{col.kind}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="border-t border-ink-100 pt-2">
             <BlueprintPicker
               templateDateParams={dateParams}
@@ -139,13 +163,32 @@ function InsertionSlot({ index, path, catalog, dateParams, onInsert, onInsertMan
 
 //--- Chip render -----------------------------------------------------
 
-function ChipView({ chip, catalog, dateParams, onChange, onDelete }: {
+function ChipView({ chip, catalog, dateParams, refCandidates, onChange, onDelete }: {
   chip: Chip;
   catalog: FieldCatalog;
   dateParams: string[];
+  refCandidates: Column[];
   onChange: (next: Chip) => void;
   onDelete: () => void;
 }) {
+  if (chip.kind === 'col_ref') {
+    const col = refCandidates.find(c => c.key === chip.key);
+    const stale = !col;
+    return (
+      <span className={
+        'inline-flex items-center px-2 py-1 rounded border font-mono text-xs ' +
+        (stale
+          ? 'border-red-300 bg-red-50 text-red-800'
+          : 'border-violet-300 bg-violet-50 text-violet-900')
+      }
+            title={stale ? `Unknown column key '${chip.key}'` : `Reference to column ${col!.label}`}>
+        <span className="select-none">@</span>{chip.key}
+        {col && <span className="ml-1 text-[10px] text-violet-600 select-none">{col.label}</span>}
+        <DeleteX onClick={onDelete} />
+      </span>
+    );
+  }
+
   if (chip.kind === 'op') {
     return (
       <span className="inline-flex items-center px-1 py-1 rounded border border-amber-200 bg-amber-50 font-mono text-base text-amber-900">

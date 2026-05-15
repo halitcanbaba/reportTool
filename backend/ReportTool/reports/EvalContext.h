@@ -24,4 +24,9 @@ struct EvalContext
    //--- Shared across all logins for one job.
    const std::map<std::string, int64_t>* date_params = nullptr;  // name → Unix seconds (00:00 UTC)
    const CompiledFilters*                filters     = nullptr;  // deal bucket regex
+
+   //--- Per-row cache of previously evaluated columns (key → numeric value).
+   //--- Populated by Engine left-to-right; ExprNode::ColRef looks up here.
+   //--- Forward / unknown refs read as 0.0.
+   const std::unordered_map<std::string, double>* column_values = nullptr;
 };

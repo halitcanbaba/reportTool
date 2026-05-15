@@ -441,17 +441,28 @@ void Engine::Run(AppContext& ctx, int64_t job_id)
 
       std::vector<GenericWriter::Cell> row;
       row.reserve(tpl.columns.size());
+
+      //--- Backward column refs read from this map; we fill it left-to-right so
+      //--- a formula in col N can use values from col 0..N-1 via ExprNode::ColRef.
+      std::unordered_map<std::string, double> col_values;
+      col_values.reserve(tpl.columns.size());
+      ec.column_values = &col_values;
+
       for(const auto& c : tpl.columns)
       {
          if(c.kind == ColumnSpec::Kind::Identifier)
          {
-            row.push_back(EvalIdentifier(c, ec));
+            GenericWriter::Cell cell = EvalIdentifier(c, ec);
+            if(cell.kind == GenericWriter::Cell::Kind::Number)
+               col_values[c.key] = cell.number;
+            row.push_back(std::move(cell));
          }
          else
          {
             try
             {
                const double v = c.expr ? Expression::Evaluate(*c.expr, ec) : 0.0;
+               col_values[c.key] = v;
                row.push_back(GenericWriter::Cell::Num(v));
             }
             catch(const std::exception& e)

@@ -29,6 +29,14 @@ double Expression::Evaluate(const ExprNode& n, const EvalContext& ctx)
          }
          return 0.0;
       }
+      case ExprNode::Type::ColRef:
+      {
+         //--- Backward refs only: the engine fills column_values left-to-right.
+         //--- Forward/unknown refs evaluate to 0.0.
+         if(!ctx.column_values) return 0.0;
+         auto it = ctx.column_values->find(n.col_ref_key);
+         return it == ctx.column_values->end() ? 0.0 : it->second;
+      }
    }
    return 0.0;
 }
@@ -200,6 +208,10 @@ json Expression::NodeToJson(const ExprNode& n)
          j["right"] = n.right ? NodeToJson(*n.right) : json(nullptr);
          break;
       }
+      case ExprNode::Type::ColRef:
+         j["type"] = "col_ref";
+         j["key"]  = n.col_ref_key;
+         break;
    }
    return j;
 }
@@ -248,9 +260,15 @@ bool Expression::NodeFromJson(const json& j,
       if(!j.contains("left")  || !NodeFromJson(j["left"],  &node->left,  err))  return false;
       if(!j.contains("right") || !NodeFromJson(j["right"], &node->right, err)) return false;
    }
+   else if(t == "col_ref")
+   {
+      node->type = ExprNode::Type::ColRef;
+      node->col_ref_key = j.value("key", "");
+      if(node->col_ref_key.empty()) { if(err) *err = "col_ref missing 'key'"; return false; }
+   }
    else
    {
-      if(err) *err = "expr node 'type' must be literal | field | binop";
+      if(err) *err = "expr node 'type' must be literal | field | binop | col_ref";
       return false;
    }
    *out = node;

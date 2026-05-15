@@ -369,7 +369,7 @@ struct Predicate
 //--- Expression AST node. JSON-serialized; recursive via shared_ptr children.
 struct ExprNode
 {
-   enum class Type { Field, BinOp, Literal };
+   enum class Type { Field, BinOp, Literal, ColRef };
 
    Type        type = Type::Literal;
 
@@ -385,6 +385,10 @@ struct ExprNode
 
    //--- Literal
    double      literal_value = 0.0;
+
+   //--- ColRef — reference to another column in the same template, by key.
+   //--- Engine resolves via EvalContext::column_values populated left-to-right.
+   std::string col_ref_key;
 };
 
 //--- One column in a template.

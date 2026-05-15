@@ -8,6 +8,7 @@ export type ChipOp = '+' | '-' | '*' | '/';
 
 export type Chip =
   | { id: string; kind: 'field';   name: string; args: string[]; predicate?: Predicate }
+  | { id: string; kind: 'col_ref'; key:  string }
   | { id: string; kind: 'literal'; value: number }
   | { id: string; kind: 'op';      op: ChipOp }
   | { id: string; kind: 'lparen' }
@@ -27,6 +28,7 @@ export function astToChips(node: ExprNode | null | undefined): Chip[] {
 
 function flatten(node: ExprNode): Chip[] {
   if (node.type === 'literal') return [{ id: newChipId(), kind: 'literal', value: node.value }];
+  if (node.type === 'col_ref') return [{ id: newChipId(), kind: 'col_ref', key: node.key }];
   if (node.type === 'field') {
     const chip: Chip = { id: newChipId(), kind: 'field', name: node.name, args: [...node.args] };
     if (node.predicate) chip.predicate = node.predicate;
@@ -72,6 +74,7 @@ export function chipsToText(chips: Chip[]): string {
 function chipText(c: Chip): string {
   switch (c.kind) {
     case 'literal': return String(c.value);
+    case 'col_ref': return `@${c.key}`;
     case 'field': {
       const base = c.args.length ? `${c.name}(${c.args.join(', ')})` : c.name;
       return c.predicate ? `${base}[${formatPredicate(c.predicate)}]` : base;

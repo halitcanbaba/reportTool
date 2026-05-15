@@ -28,6 +28,7 @@ type Token =
   | { kind: 'num';    value: number; pos: number }
   | { kind: 'str';    value: string; pos: number }
   | { kind: 'ident';  value: string; pos: number }
+  | { kind: 'colref'; value: string; pos: number }
   | { kind: 'op';     value: '+' | '-' | '*' | '/'; pos: number }
   | { kind: 'cmp';    value: '=' | '!=' | '<' | '<=' | '>' | '>=' | '~'; pos: number }
   | { kind: 'lparen'; pos: number }
@@ -91,6 +92,15 @@ function tokenize(s: string): Token[] {
       const v = Number(s.slice(i, j));
       if (!Number.isFinite(v)) throw new ParseError(`invalid number at position ${pos}`, pos);
       out.push({ kind: 'num', value: v, pos });
+      i = j;
+      continue;
+    }
+    //--- @col_key column reference (must precede ident handling)
+    if (c === '@') {
+      let j = i + 1;
+      while (j < s.length && /[a-zA-Z0-9_]/.test(s[j])) j++;
+      if (j === i + 1) throw new ParseError(`empty column reference at ${pos}`, pos);
+      out.push({ kind: 'colref', value: s.slice(i + 1, j), pos });
       i = j;
       continue;
     }
@@ -179,6 +189,10 @@ class Parser {
     if (t.kind === 'num') {
       this.consume();
       return { type: 'literal', value: t.value };
+    }
+    if (t.kind === 'colref') {
+      this.consume();
+      return { type: 'col_ref', key: t.value };
     }
     if (t.kind === 'ident') {
       this.consume();
@@ -323,6 +337,7 @@ export function formatExpression(node: ExprNode): string {
 
 function formatNode(node: ExprNode): string {
   if (node.type === 'literal') return numText(node.value);
+  if (node.type === 'col_ref') return `@${node.key}`;
   if (node.type === 'field') {
     const args = node.args.length === 0 ? '' : `(${node.args.join(', ')})`;
     const base = node.args.length === 0 ? node.name : `${node.name}${args}`;

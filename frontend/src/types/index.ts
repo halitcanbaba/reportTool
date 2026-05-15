@@ -87,7 +87,8 @@ export type Predicate = PredCmp | PredAnd | PredOr | PredNot;
 export type ExprLiteral = { type: 'literal'; value: number };
 export type ExprField   = { type: 'field';   name: string; args: string[]; predicate?: Predicate };
 export type ExprBinOp   = { type: 'binop';   op: '+' | '-' | '*' | '/'; left: ExprNode; right: ExprNode };
-export type ExprNode    = ExprLiteral | ExprField | ExprBinOp;
+export type ExprColRef  = { type: 'col_ref'; key: string };
+export type ExprNode    = ExprLiteral | ExprField | ExprBinOp | ExprColRef;
 
 //--- Field catalog (returned by GET /api/reports/fields) ---------
 

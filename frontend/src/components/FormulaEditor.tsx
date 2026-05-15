@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { ExprNode, FieldCatalog } from '../types';
+import type { Column, ExprNode, FieldCatalog } from '../types';
 import type { Chip } from '../lib/exprChips';
 import { FormulaBar } from './FormulaBar';
 import { FormulaCodeEdit } from './FormulaCodeEdit';
@@ -13,11 +13,14 @@ type Props = {
   error: string | null;
   onChipsChange: (next: Chip[]) => void;
   onExprReplace: (next: ExprNode | null) => void;  // code view "Apply"
+  //--- Previously-defined columns in this template, available for backward
+  //--- @col_key refs. Caller passes only columns *before* this one.
+  refCandidates?: Column[];
 };
 
 export function FormulaEditor({
   chips, expr, catalog, dateParams, path,
-  error, onChipsChange, onExprReplace,
+  error, onChipsChange, onExprReplace, refCandidates,
 }: Props) {
   const [view, setView] = useState<'chips' | 'code'>('chips');
 
@@ -48,6 +51,7 @@ export function FormulaEditor({
           catalog={catalog}
           dateParams={dateParams}
           path={path}
+          refCandidates={refCandidates ?? []}
         />
       ) : (
         <FormulaCodeEdit ast={expr} onApply={onExprReplace} />

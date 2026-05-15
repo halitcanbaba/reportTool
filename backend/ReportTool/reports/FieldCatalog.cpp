@@ -1177,6 +1177,7 @@ namespace
    void CollectAstSources(const ExprNode& n, AnalyzeResult& out)
    {
       if(n.type == ExprNode::Type::Literal) return;
+      if(n.type == ExprNode::Type::ColRef)  return;   // resolved from row cache, no source
       if(n.type == ExprNode::Type::BinOp)
       {
          if(n.left)  CollectAstSources(*n.left,  out);
@@ -1237,6 +1238,12 @@ namespace
          return;
       }
       if(n.type == ExprNode::Type::Literal) return;
+      if(n.type == ExprNode::Type::ColRef)
+      {
+         if(n.col_ref_key.empty())
+            errs->push_back({ path, "col_ref missing key" });
+         return;
+      }
       if(n.type == ExprNode::Type::BinOp)
       {
          if(n.op != '+' && n.op != '-' && n.op != '*' && n.op != '/')

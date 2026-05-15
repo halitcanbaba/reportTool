@@ -353,12 +353,22 @@ export function TemplateDesignerPage() {
                       error={errByIdx[idx] ?? null}
                       onChipsChange={(next) => applyChips(idx, next)}
                       onExprReplace={(next) => replaceExpr(idx, next)}
+                      refCandidates={tpl.columns.slice(0, idx).filter(
+                        rc => rc.format !== 'text'
+                      )}
                     />
                   </div>
                 )}
               </li>
             ))}
           </ul>
+
+          {tpl.columns.length > 0 && (
+            <div className="flex gap-2 pt-2 border-t border-ink-100">
+              <button className="btn-secondary text-xs" onClick={addIdentifierColumn}>+ Identifier</button>
+              <button className="btn-secondary text-xs" onClick={addFormulaColumn}>+ Formula</button>
+            </div>
+          )}
         </div>
 
         <div className="card p-5 space-y-3">
