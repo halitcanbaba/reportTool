@@ -126,7 +126,7 @@ namespace
             t->sort.column_key = j["sort"].value("column_key", "");
             t->sort.descending = j["sort"].value("direction", std::string("desc")) != "asc";
          }
-         t->default_top_n = j.value("default_top_n", 20u);
+         t->default_top_n = j.value("default_top_n", 0u);
       }
       catch(const std::exception& e) { *err = e.what(); return false; }
       return true;

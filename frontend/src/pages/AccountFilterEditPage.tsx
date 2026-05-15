@@ -4,6 +4,7 @@ import { AccountFiltersAPI } from '../api/accountFilters';
 import { ManagersAPI } from '../api/managers';
 import { FieldsAPI } from '../api/fields';
 import type { AccountFilterInput, FieldCatalog, Manager, Predicate } from '../types';
+import { GroupPicker } from '../components/GroupRegexInput';
 import { AccountFilterPreview } from '../components/AccountFilterPreview';
 import { PredicateEditor } from '../components/PredicateEditor';
 import { Breadcrumbs } from '../components/Breadcrumbs';
@@ -35,12 +36,12 @@ export function AccountFilterEditPage() {
   useEffect(() => {
     if (!editing) return;
     AccountFiltersAPI.get(Number(id)).then(f => {
-      //--- Group masks / regex / login-min/max are no longer edited here —
-      //--- the predicate editor below covers login filtering via `login gte/lte`,
-      //--- and any legacy values get cleared on next save.
+      //--- Group selection is the inline tree picker over `group_masks`.
+      //--- `group_regex` and `login_min/max` no longer have a UI here and get
+      //--- cleared on next save (predicate editor below covers login filtering).
       setForm({
         name: f.name, description: f.description,
-        group_masks: [], group_regex: '',
+        group_masks: f.group_masks, group_regex: '',
         login_min: null, login_max: null,
         manager_id: f.manager_id,
         user_predicate: f.user_predicate ?? null,
@@ -105,6 +106,13 @@ export function AccountFilterEditPage() {
           <label className="label">Description</label>
           <input className="input" value={form.description} onChange={e => update('description', e.target.value)} />
         </div>
+      </div>
+
+      <div className="card p-5 space-y-4">
+        <div className="text-sm font-semibold text-ink-700 uppercase tracking-wide">Groups</div>
+        <GroupPicker managerId={form.manager_id ?? null}
+                     value={form.group_masks}
+                     onChange={v => update('group_masks', v)} />
       </div>
 
       <div className="card p-5 space-y-3">

@@ -3,7 +3,7 @@
 
 namespace
 {
-   constexpr int kCurrentSchemaVersion = 6;
+   constexpr int kCurrentSchemaVersion = 7;
 
    //--- Tables that survive every version (managers, regex_filters,
    //--- daily_cache, deal_cache). These are idempotent.
@@ -285,6 +285,13 @@ namespace
       if(!db.Exec(kV6Tables, err)) return false;
       return WriteVersion(db, 6, err);
    }
+
+   //--- v6 → v7: reset default_top_n from legacy default 20 to 0 (no limit).
+   bool MigrateToV7(SqliteDb& db, std::string* err)
+   {
+      if(!db.Exec("UPDATE report_templates SET default_top_n=0 WHERE default_top_n=20", err)) return false;
+      return WriteVersion(db, 7, err);
+   }
 }
 
 bool Schema::Apply(SqliteDb& db, std::string* err)
@@ -325,6 +332,10 @@ bool Schema::Apply(SqliteDb& db, std::string* err)
    if(v < 6)
    {
       if(!MigrateToV6(db, err)) return false;
+   }
+   if(v < 7)
+   {
+      if(!MigrateToV7(db, err)) return false;
    }
    //--- v >= current: no-op.
    return true;
