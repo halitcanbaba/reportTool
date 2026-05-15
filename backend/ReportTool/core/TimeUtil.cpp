@@ -7,16 +7,17 @@
 
 namespace
 {
-   //--- The whole tool runs in MT5-server-local time (GMT+3). Date strings
-   //--- entered by the user / produced by reports are interpreted in this
-   //--- timezone; we convert to UTC unix only at the storage / SDK boundary.
-   constexpr int64_t kTzOffsetSec = 3 * 3600;
+   //--- The MT5 broker we connect to uses UTC trading-day boundaries: every
+   //--- IMTDaily::Datetime() arrives at 23:59:59 UTC (mod 86400 == 86399). So
+   //--- "YYYY-MM-DD" date inputs and displays are interpreted as UTC days,
+   //--- aligning user-picked dates with the daily snapshot boundary.
+   constexpr int64_t kTzOffsetSec = 0;
 
    int64_t MakeUtc(int year, int month, int day)
    {
       struct tm t = {};
       t.tm_year = year - 1900; t.tm_mon = month - 1; t.tm_mday = day;
-      //--- "YYYY-MM-DD 00:00 GMT+3" → UTC unix
+      //--- "YYYY-MM-DD 00:00 UTC" → UTC unix
       return (int64_t)_mkgmtime(&t) - kTzOffsetSec;
    }
 }
@@ -41,7 +42,7 @@ int64_t TimeUtil::ParseMonth(const std::string& s, int64_t* out_to_exclusive)
 
 std::string TimeUtil::FormatDateTime(int64_t t)
 {
-   //--- Display all timestamps in GMT+3 to match MT5 server clock.
+   //--- Display all timestamps in broker UTC (trading-day boundary).
    time_t raw = (time_t)(t + kTzOffsetSec); struct tm tm_info; gmtime_s(&tm_info, &raw);
    char buf[32]; strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm_info);
    return buf;

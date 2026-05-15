@@ -1,14 +1,14 @@
 //--- Preset date ranges used by every date-picking form in the app.
-//--- All math is in GMT+3 (matches MT5 server time and backend behavior).
+//--- The MT5 broker uses UTC trading-day boundaries; all math is broker UTC.
 
-const TZ_OFFSET = 3 * 3600;
+const TZ_OFFSET = 0;
 
 function ymdAt(secs: number): string {
   return new Date((secs + TZ_OFFSET) * 1000).toISOString().slice(0, 10);
 }
 function nowSec(): number { return Math.floor(Date.now() / 1000); }
 
-//--- GMT+3 day-of-week (0=Sun..6=Sat) for now.
+//--- Broker UTC day-of-week (0=Sun..6=Sat) for now.
 function dowLocal(): number {
   return new Date((nowSec() + TZ_OFFSET) * 1000).getUTCDay();
 }

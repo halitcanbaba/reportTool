@@ -11,6 +11,18 @@ namespace
    constexpr size_t  BATCH  = 200;
    constexpr int64_t WINDOW = 120LL * 86400LL;
 
+   //--- Env-gated diagnostic for daily-snapshot date-boundary debugging.
+   //--- Set REPORTTOOL_DAILY_DIAG=1 to enable [DAILY-DIAG] log lines.
+   bool DailyDiagEnabled()
+   {
+      static const bool enabled = []() {
+         char buf[8]; size_t n = 0;
+         if(getenv_s(&n, buf, sizeof(buf), "REPORTTOOL_DAILY_DIAG") != 0) return false;
+         return n > 0 && buf[0] == '1';
+      }();
+      return enabled;
+   }
+
    std::string W2U(LPCWSTR w)
    {
       if(!w || w[0]==L'\0') return "";
@@ -537,12 +549,40 @@ namespace
       }
 
       const uint32_t n = arr->Total();
+      const bool diag = log && DailyDiagEnabled();
+      if(diag)
+      {
+         log->Info("[DAILY-DIAG] window w_from=%lld (%s, %%86400=%lld) w_to=%lld (%s) logins=%zu rows=%u",
+                   (long long)w_from, TimeUtil::FormatDateTime(w_from).c_str(),
+                   (long long)(w_from % 86400),
+                   (long long)w_to,   TimeUtil::FormatDateTime(w_to).c_str(),
+                   logins.size(), n);
+      }
       for(uint32_t i = 0; i < n; ++i)
       {
          IMTDaily* d = arr->Next(i); if(!d) continue;
          DailyRow x; FillDailyRow(d, x);
+         if(diag && (i < 3 || i + 3 >= n))
+         {
+            const int64_t dt = x.datetime;
+            log->Info("[DAILY-DIAG]   row[%u/%u] login=%llu Datetime=%lld (%s, %%86400=%lld) ProfitEquity=%.4f EquityPrevDay=%.4f",
+                      i, n, (unsigned long long)x.login,
+                      (long long)dt, TimeUtil::FormatDateTime(dt).c_str(),
+                      (long long)(dt % 86400),
+                      x.profit_equity, x.equity_prev_day);
+         }
          r.per_login[x.login].push_back(std::move(x));
          r.rows++;
+      }
+      if(diag && logins.size() <= 5)
+      {
+         for(uint64_t lg : logins)
+         {
+            auto it = r.per_login.find(lg);
+            const size_t cnt = (it == r.per_login.end()) ? 0 : it->second.size();
+            log->Info("[DAILY-DIAG]   per-login login=%llu rows=%zu",
+                      (unsigned long long)lg, cnt);
+         }
       }
       arr->Release();
       return r;

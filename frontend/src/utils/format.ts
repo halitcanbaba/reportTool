@@ -23,9 +23,9 @@ export function fmtPct(v: number, digits = 2): string {
   return v.toFixed(digits) + '%';
 }
 
-//--- All timestamps displayed in GMT+3 (matches MT5 server time).
-//--- Stored values are still UTC unix; offset applied only at render time.
-const TZ_OFFSET_SEC = 3 * 3600;
+//--- The MT5 broker uses UTC trading-day boundaries (daily snapshots at
+//--- 23:59:59 UTC), so all dates entered/displayed here are UTC days.
+const TZ_OFFSET_SEC = 0;
 
 export function fmtDate(unixSec: number): string {
   if (!unixSec) return '';
@@ -34,16 +34,16 @@ export function fmtDate(unixSec: number): string {
 
 export function fmtDateTime(unixSec: number): string {
   if (!unixSec) return '';
-  return new Date((unixSec + TZ_OFFSET_SEC) * 1000).toISOString().replace('T', ' ').slice(0, 19) + ' GMT+3';
+  return new Date((unixSec + TZ_OFFSET_SEC) * 1000).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
 }
 
-//--- Today's date in GMT+3, formatted YYYY-MM-DD. Used for default date inputs.
+//--- Today's date in broker UTC, formatted YYYY-MM-DD. Used for default date inputs.
 export function todayLocal(): string {
   const now = Math.floor(Date.now() / 1000);
   return new Date((now + TZ_OFFSET_SEC) * 1000).toISOString().slice(0, 10);
 }
 
-//--- YYYY-MM-DD that is N days before today in GMT+3.
+//--- YYYY-MM-DD that is N days before today (broker UTC).
 export function todayLocalMinus(days: number): string {
   const now = Math.floor(Date.now() / 1000);
   return new Date((now + TZ_OFFSET_SEC - days * 86400) * 1000).toISOString().slice(0, 10);

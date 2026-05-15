@@ -261,6 +261,36 @@ void Engine::Run(AppContext& ctx, int64_t job_id)
    const bool has_range    = range_to_excl > range_from;
    const bool has_snapshot = !snapshot_targets.empty();
 
+   //--- Diagnostic: set env REPORTTOOL_DAILY_DIAG=1 to log resolved date params,
+   //--- range/snapshot boundaries — read alongside DataLoader's [DAILY-DIAG] lines
+   //--- to determine the broker's IMTDaily::Datetime() convention.
+   if(need_daily)
+   {
+      char ebuf[8]; size_t en = 0;
+      const bool diag = (getenv_s(&en, ebuf, sizeof(ebuf), "REPORTTOOL_DAILY_DIAG") == 0)
+                        && en > 0 && ebuf[0] == '1';
+      if(diag)
+      {
+         ctx.log->Info("[DAILY-DIAG] resolve job=%lld template='%s' has_range=%d has_snapshot=%d",
+                       (long long)job_id, tpl.name.c_str(), (int)has_range, (int)has_snapshot);
+         for(const auto& kv : date_params)
+         {
+            ctx.log->Info("[DAILY-DIAG]   date_param '%s' = %lld (%s, %%86400=%lld)",
+                          kv.first.c_str(), (long long)kv.second,
+                          TimeUtil::FormatDateTime(kv.second).c_str(),
+                          (long long)(kv.second % 86400));
+         }
+         if(has_range)
+            ctx.log->Info("[DAILY-DIAG]   range [%lld, %lld) = [%s, %s)",
+                          (long long)range_from, (long long)range_to_excl,
+                          TimeUtil::FormatDateTime(range_from).c_str(),
+                          TimeUtil::FormatDateTime(range_to_excl).c_str());
+         for(int64_t t : snapshot_targets)
+            ctx.log->Info("[DAILY-DIAG]   snapshot_target %lld (%s)",
+                          (long long)t, TimeUtil::FormatDateTime(t).c_str());
+      }
+   }
+
    //--- Lazy fetch -------------------------------------------------
    std::unordered_map<uint64_t, std::vector<DailyRow>>       daily;
    std::unordered_map<uint64_t, std::vector<DealRow>>        deals;
@@ -272,7 +302,26 @@ void Engine::Run(AppContext& ctx, int64_t job_id)
    if(need_daily)
    {
       if(has_range)
-         daily = DataLoader::LoadDailyParallel(*conn, *ctx.threads, logins, range_from, range_to_excl, *ctx.log);
+      {
+         //--- When the template mixes range fields AND snapshot fields, the
+         //--- daily fetch must cover BOTH the range AND the snapshot windows.
+         //--- PickLatestAtOrBefore needs rows up to ~7 days BEFORE each
+         //--- snapshot target (weekends / missing days). Without this,
+         //--- *_start(date_from) and *_prev_day_*(date_from/date_to) starve
+         //--- and fall back to whatever the nearest in-range row happens to be.
+         int64_t daily_from = range_from;
+         int64_t daily_to_excl = range_to_excl;
+         if(has_snapshot)
+         {
+            const int64_t SNAP_MARGIN = 7 * 86400;
+            for(int64_t t : snapshot_targets)
+            {
+               if(t - SNAP_MARGIN < daily_from)  daily_from    = t - SNAP_MARGIN;
+               if(t + 86400      > daily_to_excl) daily_to_excl = t + 86400;
+            }
+         }
+         daily = DataLoader::LoadDailyParallel(*conn, *ctx.threads, logins, daily_from, daily_to_excl, *ctx.log);
+      }
       else if(has_snapshot)
          daily = DataLoader::LoadDailyBoundary(*conn, *ctx.threads, logins, snapshot_targets, 7, *ctx.log);
    }

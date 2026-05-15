@@ -112,7 +112,7 @@ export function ScheduleEditPage() {
       </div>
 
       <div className="card p-5 space-y-4">
-        <div className="text-sm font-semibold text-ink-700 uppercase tracking-wide">Recurrence (GMT+3)</div>
+        <div className="text-sm font-semibold text-ink-700 uppercase tracking-wide">Recurrence (UTC)</div>
 
         <div>
           <label className="label">Frequency</label>

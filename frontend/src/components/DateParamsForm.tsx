@@ -83,7 +83,7 @@ export function DateParamsForm({ dateParams, value, onChange }: Props) {
       </div>
 
       <div className="text-[11px] text-ink-400">
-        Dates interpreted in GMT+3 (MT5 server time).
+        Dates interpreted in UTC (MT5 broker trading day).
       </div>
     </div>
   );

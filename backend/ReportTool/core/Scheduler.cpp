@@ -50,11 +50,11 @@ void Scheduler::Loop()
 
 namespace
 {
-   //--- All scheduling and relative-date math is done in GMT+3 (MT5 server time)
-   //--- so the UI's hour/minute/day fields and presets line up with what
-   //--- operators see in MT5 Manager. Persisted timestamps stay UTC; the offset
-   //--- is applied at the boundary.
-   constexpr int64_t kTzOffsetSec = 3 * 3600;
+   //--- Scheduling and relative-date math is done in broker UTC (the MT5 broker
+   //--- we connect to uses UTC trading-day boundaries — see TimeUtil.cpp). The
+   //--- offset constant is kept (== 0 now) so the helper structure below stays
+   //--- intact and can be re-pointed if a future broker uses a different TZ.
+   constexpr int64_t kTzOffsetSec = 0;
 
    //--- Internal: gmtime/_mkgmtime helpers operate on UTC. To work in "local
    //--- wall clock" (GMT+3) we shift by +offset before reading, and -offset
@@ -195,8 +195,8 @@ namespace
 
 int64_t Scheduler::ComputeNext(const ScheduleEntry& s, int64_t now)
 {
-   //--- All wall-clock math in GMT+3 (matches MT5 server time); the stored
-   //--- next_run_at is still UTC, the helpers handle the offset.
+   //--- All wall-clock math in broker UTC (the connected MT5 broker uses UTC
+   //--- trading-day boundaries — kTzOffsetSec is 0). next_run_at is stored UTC.
    int y, mo, d; ToYmdLocal(now, &y, &mo, &d);
    if(s.frequency == "hourly")
    {

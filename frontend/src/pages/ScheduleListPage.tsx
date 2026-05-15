@@ -8,7 +8,7 @@ import { copyName } from '../lib/duplicate';
 import type { ScheduleEntry, ReadyMadeReport } from '../types';
 
 function describeFreq(s: ScheduleEntry): string {
-  const t = `${String(s.time_hour).padStart(2, '0')}:${String(s.time_minute).padStart(2, '0')} GMT+3`;
+  const t = `${String(s.time_hour).padStart(2, '0')}:${String(s.time_minute).padStart(2, '0')} UTC`;
   switch (s.frequency) {
     case 'daily':   return `Daily at ${t}`;
     case 'weekly':  return `Weekly on ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][s.day_of_week] ?? '?'} at ${t}`;
@@ -91,7 +91,7 @@ export function ScheduleListPage() {
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-2xl font-semibold text-ink-900">Scheduler</h1>
-            <p className="text-sm text-ink-500 mt-1">Recurring ready-made reports delivered via Telegram. All times in GMT+3 (MT5 server time).</p>
+            <p className="text-sm text-ink-500 mt-1">Recurring ready-made reports delivered via Telegram. All times in UTC (MT5 broker trading day).</p>
           </div>
           <Link to="/schedules/new" className="btn-primary">+ New schedule</Link>
         </div>

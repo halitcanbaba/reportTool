@@ -374,19 +374,21 @@ namespace
       return hit;
    }
 
-   //--- Daily snapshot start: target = D - 86400
+   //--- Daily snapshot start: latest record stamped strictly before UTC day D
+   //--- (= the previous trading day's 23:59:59 close record). D is a UTC midnight.
    double DailyStart(const EvalContext& ctx, int64_t D, double (*sel)(const DailyRow&))
    {
       const auto& v = Need(ctx.daily, "daily");
-      const DailyRow* r = PickLatestAtOrBefore(v, D - 86400);
+      const DailyRow* r = PickLatestAtOrBefore(v, D - 1);
       return r ? sel(*r) : 0.0;
    }
 
-   //--- Daily snapshot end: target = D
+   //--- Daily snapshot end: latest record stamped within UTC day D
+   //--- (= that day's own 23:59:59 close record when present).
    double DailyEnd(const EvalContext& ctx, int64_t D, double (*sel)(const DailyRow&))
    {
       const auto& v = Need(ctx.daily, "daily");
-      const DailyRow* r = PickLatestAtOrBefore(v, D);
+      const DailyRow* r = PickLatestAtOrBefore(v, D + 86400 - 1);
       return r ? sel(*r) : 0.0;
    }
 

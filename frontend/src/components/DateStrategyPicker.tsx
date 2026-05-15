@@ -131,7 +131,7 @@ export function DateStrategyPicker({ template, value, onChange }: Props) {
         <div className="text-[11px] text-ink-500 bg-blue-50 border border-blue-100 rounded px-3 py-2">
           Re-computed at every run. Today it would resolve to{' '}
           <span className="font-mono">{previewRange.from}</span> →{' '}
-          <span className="font-mono">{previewRange.to}</span> (GMT+3).
+          <span className="font-mono">{previewRange.to}</span> (UTC).
         </div>
       )}
 
@@ -152,7 +152,7 @@ export function DateStrategyPicker({ template, value, onChange }: Props) {
       )}
 
       <div className="text-[11px] text-ink-400">
-        Dates interpreted in GMT+3 (MT5 server time).
+        Dates interpreted in UTC (MT5 broker trading day).
       </div>
     </div>
   );

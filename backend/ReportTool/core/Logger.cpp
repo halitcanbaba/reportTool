@@ -4,6 +4,7 @@
 //+------------------------------------------------------------------+
 #include "../stdafx.h"
 #include "Logger.h"
+#include <share.h>
 
 namespace { thread_local std::string t_request_id; }
 
@@ -12,7 +13,7 @@ std::string Logger::RequestId() { return t_request_id; }
 
 Logger::Logger(const std::string& log_path)
 {
-   fopen_s(&m_file, log_path.c_str(), "a");
+   m_file = _fsopen(log_path.c_str(), "a", _SH_DENYWR);
 }
 
 Logger::~Logger()
