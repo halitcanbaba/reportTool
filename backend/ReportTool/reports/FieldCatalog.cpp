@@ -229,6 +229,7 @@ namespace
 
    double UserGetNum(const UserInfo& u, const std::string& f)
    {
+      if(f == "login")              return (double)u.login;
       if(f == "agent")              return (double)u.agent;
       if(f == "client_id")          return (double)u.client_id;
       if(f == "leverage")           return (double)u.leverage;
@@ -1514,6 +1515,7 @@ namespace
       user.push_back({"lead_campaign",  "Lead Campaign",  VT::Text, {}});
       user.push_back({"lead_source",    "Lead Source",    VT::Text, {}});
       user.push_back({"last_ip",        "Last IP",        VT::Text, {}});
+      user.push_back({"login",            "Login",            VT::Num, {}});
       user.push_back({"agent",            "Agent",            VT::Num, {}});
       user.push_back({"client_id",        "Client ID",        VT::Num, {}});
       user.push_back({"leverage",         "Leverage",         VT::Num, {}});

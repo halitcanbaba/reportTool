@@ -93,7 +93,7 @@ namespace
       "  date_params    TEXT NOT NULL DEFAULT '[]',"
       "  columns_json   TEXT NOT NULL,"
       "  sort_json      TEXT NOT NULL DEFAULT '{}',"
-      "  default_top_n  INTEGER NOT NULL DEFAULT 20,"
+      "  default_top_n  INTEGER NOT NULL DEFAULT 0,"
       "  created_at     INTEGER NOT NULL,"
       "  updated_at     INTEGER NOT NULL"
       ");"

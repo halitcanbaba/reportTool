@@ -17,7 +17,7 @@ export function RunReportPage() {
   const [managerId, setManagerId] = useState<number | null>(null);
   const [accountFilterId, setAccountFilterId] = useState<number | null>(null);
   const [dates, setDates] = useState<Record<string, string>>({});
-  const [topN, setTopN] = useState(20);
+  const [topN, setTopN] = useState(0);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 

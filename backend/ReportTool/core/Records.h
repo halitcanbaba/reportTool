@@ -432,7 +432,7 @@ struct ReportTemplate
    std::vector<std::string> date_params;            // ordered named slots
    std::vector<ColumnSpec>  columns;
    SortSpec                 sort;
-   uint32_t                 default_top_n = 20;
+   uint32_t                 default_top_n = 0;   // 0 = no limit
    int64_t                  created_at    = 0;
    int64_t                  updated_at    = 0;
 };

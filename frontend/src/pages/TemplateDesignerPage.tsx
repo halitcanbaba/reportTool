@@ -24,7 +24,7 @@ const emptyTemplate: TemplateInput = {
   date_params: ['date_from', 'date_to'],
   columns: [],
   sort: { column_key: '', direction: 'desc' },
-  default_top_n: 20,
+  default_top_n: 0,
 };
 
 function uniqueKey(prefix: string, cols: Column[]) {

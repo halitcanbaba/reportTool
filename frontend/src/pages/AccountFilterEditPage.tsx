@@ -4,7 +4,6 @@ import { AccountFiltersAPI } from '../api/accountFilters';
 import { ManagersAPI } from '../api/managers';
 import { FieldsAPI } from '../api/fields';
 import type { AccountFilterInput, FieldCatalog, Manager, Predicate } from '../types';
-import { GroupMasksInput } from '../components/GroupMasksInput';
 import { AccountFilterPreview } from '../components/AccountFilterPreview';
 import { PredicateEditor } from '../components/PredicateEditor';
 import { Breadcrumbs } from '../components/Breadcrumbs';
@@ -27,7 +26,6 @@ export function AccountFilterEditPage() {
   const [catalog, setCatalog] = useState<FieldCatalog | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [showAdvanced, setShowAdvanced] = useState(false);
 
   useEffect(() => {
     ManagersAPI.list().then(setManagers).catch(() => {});
@@ -37,14 +35,16 @@ export function AccountFilterEditPage() {
   useEffect(() => {
     if (!editing) return;
     AccountFiltersAPI.get(Number(id)).then(f => {
+      //--- Group masks / regex / login-min/max are no longer edited here —
+      //--- the predicate editor below covers login filtering via `login gte/lte`,
+      //--- and any legacy values get cleared on next save.
       setForm({
         name: f.name, description: f.description,
-        group_masks: f.group_masks, group_regex: f.group_regex,
-        login_min: f.login_min, login_max: f.login_max,
+        group_masks: [], group_regex: '',
+        login_min: null, login_max: null,
         manager_id: f.manager_id,
         user_predicate: f.user_predicate ?? null,
       });
-      if (f.group_regex) setShowAdvanced(true);
     });
   }, [editing, id]);
 
@@ -104,43 +104,6 @@ export function AccountFilterEditPage() {
         <div>
           <label className="label">Description</label>
           <input className="input" value={form.description} onChange={e => update('description', e.target.value)} />
-        </div>
-      </div>
-
-      <div className="card p-5 space-y-4">
-        <div className="text-sm font-semibold text-ink-700 uppercase tracking-wide">Group masks</div>
-        <GroupMasksInput managerId={form.manager_id ?? null}
-                         value={form.group_masks}
-                         onChange={v => update('group_masks', v)} />
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="label">Login min (optional)</label>
-            <input className="input" type="number" value={form.login_min ?? ''}
-                   onChange={e => update('login_min', e.target.value ? Number(e.target.value) : null)} />
-          </div>
-          <div>
-            <label className="label">Login max (optional)</label>
-            <input className="input" type="number" value={form.login_max ?? ''}
-                   onChange={e => update('login_max', e.target.value ? Number(e.target.value) : null)} />
-          </div>
-        </div>
-
-        <div>
-          <button type="button"
-                  className="text-xs text-ink-500 hover:text-ink-800 underline"
-                  onClick={() => setShowAdvanced(s => !s)}>
-            {showAdvanced ? '− Hide advanced' : '+ Advanced (group regex)'}
-          </button>
-          {showAdvanced && (
-            <div className="mt-2">
-              <label className="label">Group regex (ECMAScript, post-filter)</label>
-              <input className="input font-mono text-xs" value={form.group_regex}
-                     onChange={e => update('group_regex', e.target.value)} placeholder="^real\\Indonesia\\.+$" />
-              <div className="text-[11px] text-ink-500 mt-1">
-                Applied after group masks. Use to narrow further when wildcards aren't precise enough.
-              </div>
-            </div>
-          )}
         </div>
       </div>
 
