@@ -7,10 +7,11 @@ import { parseExpression, formatExpression, formatPredicate } from './exprParser
 export type ChipOp = '+' | '-' | '*' | '/';
 
 export type Chip =
-  | { id: string; kind: 'field';   name: string; args: string[]; predicate?: Predicate }
-  | { id: string; kind: 'col_ref'; key:  string }
-  | { id: string; kind: 'literal'; value: number }
-  | { id: string; kind: 'op';      op: ChipOp }
+  | { id: string; kind: 'field';     name: string; args: string[]; predicate?: Predicate }
+  | { id: string; kind: 'col_ref';   key:  string }
+  | { id: string; kind: 'blueprint'; name: string; inner: Chip[] }
+  | { id: string; kind: 'literal';   value: number }
+  | { id: string; kind: 'op';        op: ChipOp }
   | { id: string; kind: 'lparen' }
   | { id: string; kind: 'rparen' };
 
@@ -73,8 +74,9 @@ export function chipsToText(chips: Chip[]): string {
 
 function chipText(c: Chip): string {
   switch (c.kind) {
-    case 'literal': return String(c.value);
-    case 'col_ref': return `@${c.key}`;
+    case 'literal':   return String(c.value);
+    case 'col_ref':   return `@${c.key}`;
+    case 'blueprint': return `(${chipsToText(c.inner)})`;   // wrapper drops on save/round-trip
     case 'field': {
       const base = c.args.length ? `${c.name}(${c.args.join(', ')})` : c.name;
       return c.predicate ? `${base}[${formatPredicate(c.predicate)}]` : base;

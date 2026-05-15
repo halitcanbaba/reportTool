@@ -407,6 +407,12 @@ struct ColumnSpec
 
    //--- Formula
    std::shared_ptr<ExprNode> expr;
+
+   //--- Pivot row filter — only consulted on the FIRST column when it is an
+   //--- identifier with a pivotable source (login/group/symbol/ticket).
+   //--- For login/group pivots the predicate runs against UserInfo; for
+   //--- symbol/ticket it runs against each DealRow before bucketing.
+   std::shared_ptr<Predicate> row_predicate;
 };
 
 struct SortSpec

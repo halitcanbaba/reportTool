@@ -29,4 +29,10 @@ struct EvalContext
    //--- Populated by Engine left-to-right; ExprNode::ColRef looks up here.
    //--- Forward / unknown refs read as 0.0.
    const std::unordered_map<std::string, double>* column_values = nullptr;
+
+   //--- Pivot key for the current row. Engine fills these per RowContext;
+   //--- identifier fields like `symbol` / `ticket` read from here when the
+   //--- bucket has no underlying User.
+   std::string pivot_key_text;
+   double      pivot_key_num = 0.0;
 };

@@ -142,8 +142,12 @@ export type Column = {
   label:  string;
   kind:   ColumnKind;
   format: ColumnFormat;
-  source?: string;     // identifier-only
-  expr?:   ExprNode;   // formula-only
+  source?: string;            // identifier-only
+  expr?:   ExprNode;          // formula-only
+  //--- Pivot row filter — only used by the engine when this is the FIRST
+  //--- column and its identifier source is a pivot dimension
+  //--- (login | group → user predicate; symbol | ticket → deal predicate).
+  row_predicate?: Predicate | null;
 };
 
 export type SortSpec = {

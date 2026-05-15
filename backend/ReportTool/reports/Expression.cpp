@@ -401,6 +401,8 @@ std::string Expression::ColumnsToJsonString(const std::vector<ColumnSpec>& cols)
          j["source"] = c.source;
       else if(c.expr)
          j["expr"] = NodeToJson(*c.expr);
+      if(c.row_predicate)
+         j["row_predicate"] = PredicateToJson(*c.row_predicate);
       arr.push_back(std::move(j));
    }
    return arr.dump();
@@ -433,6 +435,15 @@ bool Expression::ColumnsFromJsonString(const std::string& s,
          if(!NodeFromJson(j["expr"], &c.expr, &e))
          {
             if(err) *err = "column '" + c.key + "': " + e;
+            return false;
+         }
+      }
+      if(j.contains("row_predicate") && !j["row_predicate"].is_null())
+      {
+         std::string e;
+         if(!PredicateFromJson(j["row_predicate"], &c.row_predicate, &e))
+         {
+            if(err) *err = "column '" + c.key + "' row_predicate: " + e;
             return false;
          }
       }

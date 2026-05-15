@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useDroppable } from '@dnd-kit/core';
 import type { Column, FieldCatalog, FieldDef, Predicate } from '../types';
 import type { Chip, ChipOp } from '../lib/exprChips';
-import { astToChips, newChipId } from '../lib/exprChips';
+import { astToChips, astToText, chipsToAst, newChipId } from '../lib/exprChips';
 import { FieldPicker } from './FieldPicker';
 import { PredicateEditor } from './PredicateEditor';
 import { BlueprintPicker } from './BlueprintPicker';
@@ -49,6 +49,11 @@ export function FormulaBar({ chips, onChipsChange, catalog, dateParams, path, re
     next[idx] = chip;
     onChipsChange(next);
   };
+  const replaceManyAt = (idx: number, items: Chip[]) => {
+    const next = chips.slice();
+    next.splice(idx, 1, ...items);
+    onChipsChange(next);
+  };
   const deleteAt = (idx: number) => {
     const next = chips.slice();
     next.splice(idx, 1);
@@ -66,6 +71,7 @@ export function FormulaBar({ chips, onChipsChange, catalog, dateParams, path, re
           <ChipView chip={c} catalog={catalog} dateParams={dateParams}
                     refCandidates={refCandidates}
                     onChange={(next) => replaceAt(i, next)}
+                    onReplaceMany={(items) => replaceManyAt(i, items)}
                     onDelete={() => deleteAt(i)} />
           <InsertionSlot index={i + 1} path={path} catalog={catalog} dateParams={dateParams}
                          refCandidates={refCandidates}
@@ -152,7 +158,14 @@ function InsertionSlot({ index, path, catalog, dateParams, refCandidates, onInse
           <div className="border-t border-ink-100 pt-2">
             <BlueprintPicker
               templateDateParams={dateParams}
-              onInsert={(expr) => { onInsertMany(astToChips(expr)); setOpen(false); }}
+              onInsert={(expr, name) => {
+                //--- Wrap the blueprint's chips in a single named blueprint chip
+                //--- so the formula bar shows the blueprint name instead of the
+                //--- expanded expression. (Identity is in-memory only — on save
+                //--- + reload it round-trips through plain chips.)
+                onInsert({ id: newChipId(), kind: 'blueprint', name, inner: astToChips(expr) });
+                setOpen(false);
+              }}
             />
           </div>
         </span>
@@ -163,14 +176,23 @@ function InsertionSlot({ index, path, catalog, dateParams, refCandidates, onInse
 
 //--- Chip render -----------------------------------------------------
 
-function ChipView({ chip, catalog, dateParams, refCandidates, onChange, onDelete }: {
+function ChipView({ chip, catalog, dateParams, refCandidates, onChange, onReplaceMany, onDelete }: {
   chip: Chip;
   catalog: FieldCatalog;
   dateParams: string[];
   refCandidates: Column[];
   onChange: (next: Chip) => void;
+  onReplaceMany: (items: Chip[]) => void;
   onDelete: () => void;
 }) {
+  if (chip.kind === 'blueprint') {
+    return (
+      <BlueprintChipView chip={chip}
+                         onDetach={() => onReplaceMany(chip.inner)}
+                         onDelete={onDelete} />
+    );
+  }
+
   if (chip.kind === 'col_ref') {
     const col = refCandidates.find(c => c.key === chip.key);
     const stale = !col;
@@ -331,5 +353,53 @@ function DeleteX({ onClick }: { onClick: () => void }) {
             className="text-red-500 hover:text-red-700 text-xs ml-1 px-0.5"
             title="remove"
             onClick={onClick}>×</button>
+  );
+}
+
+//--- Blueprint chip: single named pill. Click toggles an inline read-only
+//--- preview of the inner formula; "Detach" replaces the pill with its
+//--- constituent chips for direct editing.
+function BlueprintChipView({ chip, onDetach, onDelete }: {
+  chip: Extract<Chip, { kind: 'blueprint' }>;
+  onDetach: () => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  let innerText = '';
+  try { innerText = astToText(chipsToAst(chip.inner)); } catch { innerText = '(unrenderable)'; }
+  return (
+    <span className="relative inline-flex items-center px-2 py-1 rounded border border-indigo-300 bg-indigo-50">
+      <button type="button"
+              className="text-xs font-medium text-indigo-900 hover:text-indigo-950 flex items-center"
+              title="Click to view the blueprint's inner formula"
+              onClick={() => setOpen(o => !o)}>
+        <span className="text-[10px] text-indigo-500 mr-1 select-none">{open ? '▾' : '▸'}</span>
+        <span className="text-[10px] uppercase tracking-wide text-indigo-500 mr-1 select-none">bp</span>
+        {chip.name}
+      </button>
+      <DeleteX onClick={onDelete} />
+      {open && (
+        <div className="absolute z-40 top-full left-0 mt-1 min-w-[320px] max-w-[600px] bg-white border border-indigo-200 rounded shadow-lg p-3 space-y-2"
+             onMouseDown={e => e.stopPropagation()}>
+          <div className="flex items-center justify-between">
+            <div className="text-xs font-semibold text-ink-700">Blueprint · {chip.name}</div>
+            <button type="button" className="text-xs text-ink-500 hover:text-ink-900"
+                    onClick={() => setOpen(false)}>close ×</button>
+          </div>
+          <div className="text-[11px] text-ink-500">Inner formula (read-only):</div>
+          <code className="block font-mono text-xs text-ink-800 bg-ink-50 px-2 py-1.5 rounded break-all">
+            {innerText}
+          </code>
+          <div className="flex items-center justify-end pt-1">
+            <button type="button"
+                    className="btn-secondary text-xs px-2 py-1"
+                    title="Replace this pill with its constituent chips so you can edit them inline"
+                    onClick={() => { setOpen(false); onDetach(); }}>
+              Detach into chips
+            </button>
+          </div>
+        </div>
+      )}
+    </span>
   );
 }

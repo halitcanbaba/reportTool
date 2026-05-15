@@ -117,6 +117,269 @@ namespace
       const std::string& sb = b.text;
       return sa < sb;
    }
+
+   //--- Pivot dimension derived from the first column's identifier source.
+   //--- `Login` keeps the old per-user loop semantics with zero-copy views.
+   enum class Pivot { Login, Group, Symbol, Ticket };
+
+   Pivot DetectPivot(const ReportTemplate& tpl)
+   {
+      if(tpl.columns.empty()) return Pivot::Login;
+      const auto& c0 = tpl.columns[0];
+      if(c0.kind != ColumnSpec::Kind::Identifier) return Pivot::Login;
+      if(c0.source == "group")  return Pivot::Group;
+      if(c0.source == "symbol") return Pivot::Symbol;
+      if(c0.source == "ticket") return Pivot::Ticket;
+      return Pivot::Login;
+   }
+
+   //--- One output row's worth of pivot-bucketed inputs. Views point into
+   //--- shared maps when we can (Login fast path); owned vectors hold the
+   //--- merged/filtered slice otherwise.
+   struct RowContext
+   {
+      std::string pivot_text;
+      double      pivot_num = 0.0;
+      const UserInfo*    user    = nullptr;
+      const AccountInfo* account = nullptr;
+      const std::vector<DailyRow>*          daily_view          = nullptr;
+      const std::vector<DealRow>*           deals_view          = nullptr;
+      const std::vector<PositionRow>*       positions_view      = nullptr;
+      const std::vector<OpenOrderRow>*      open_orders_view    = nullptr;
+      const std::vector<HistoryOrderRow>*   history_orders_view = nullptr;
+      std::vector<DailyRow>          daily_owned;
+      std::vector<DealRow>           deals_owned;
+      std::vector<PositionRow>       positions_owned;
+      std::vector<OpenOrderRow>      open_orders_owned;
+      std::vector<HistoryOrderRow>   history_orders_owned;
+   };
+
+   //--- Apply a user-source predicate to narrow the user list. Falls through
+   //--- (returns all users) when `pred` is null. Predicate exceptions are
+   //--- treated as "exclude this row" to match the per-row try/catch elsewhere.
+   std::vector<const UserInfo*> FilterUsers(const std::vector<UserInfo>& users,
+                                            const Predicate* pred)
+   {
+      std::vector<const UserInfo*> out;
+      out.reserve(users.size());
+      for(const auto& u : users)
+      {
+         if(pred)
+         {
+            try { if(!FieldCatalog::EvalUserPredicate(*pred, u)) continue; }
+            catch(...) { continue; }
+         }
+         out.push_back(&u);
+      }
+      return out;
+   }
+
+   bool DealMatches(const Predicate* pred, const DealRow& d)
+   {
+      if(!pred) return true;
+      try { return FieldCatalog::EvalDealPredicate(*pred, d); }
+      catch(...) { return false; }
+   }
+
+   std::vector<RowContext> BuildLoginContexts(
+      const std::vector<UserInfo>& users,
+      std::unordered_map<uint64_t, std::vector<DailyRow>>&        daily,
+      std::unordered_map<uint64_t, std::vector<DealRow>>&         deals,
+      std::unordered_map<uint64_t, std::vector<PositionRow>>&     positions,
+      std::unordered_map<uint64_t, std::vector<OpenOrderRow>>&    open_orders,
+      std::unordered_map<uint64_t, std::vector<HistoryOrderRow>>& history_orders,
+      std::unordered_map<uint64_t, AccountInfo>&                  accounts,
+      const Predicate*                                            row_pred)
+   {
+      std::vector<RowContext> out;
+      out.reserve(users.size());
+      for(const auto& u : users)
+      {
+         if(row_pred)
+         {
+            try { if(!FieldCatalog::EvalUserPredicate(*row_pred, u)) continue; }
+            catch(...) { continue; }
+         }
+         RowContext rc;
+         rc.pivot_text = u.group;
+         rc.pivot_num  = (double)u.login;
+         rc.user       = &u;
+         auto ait = accounts.find(u.login);
+         rc.account    = (ait != accounts.end()) ? &ait->second : nullptr;
+         auto fdaily = daily.find(u.login);          if(fdaily       != daily.end())          rc.daily_view          = &fdaily->second;
+         auto fdeal  = deals.find(u.login);          if(fdeal        != deals.end())          rc.deals_view          = &fdeal->second;
+         auto fpos   = positions.find(u.login);      if(fpos         != positions.end())      rc.positions_view      = &fpos->second;
+         auto foo    = open_orders.find(u.login);    if(foo          != open_orders.end())    rc.open_orders_view    = &foo->second;
+         auto foh    = history_orders.find(u.login); if(foh          != history_orders.end()) rc.history_orders_view = &foh->second;
+         out.push_back(std::move(rc));
+      }
+      return out;
+   }
+
+   //--- Append all rows from `src` (a per-login map) onto `dst` for every
+   //--- login in `logins_in_bucket`. Used by Group pivot to merge across users.
+   template <class Row>
+   void AppendForLogins(std::vector<Row>& dst,
+                        const std::unordered_map<uint64_t, std::vector<Row>>& src,
+                        const std::vector<uint64_t>& logins_in_bucket)
+   {
+      for(uint64_t lg : logins_in_bucket)
+      {
+         auto it = src.find(lg);
+         if(it == src.end()) continue;
+         dst.insert(dst.end(), it->second.begin(), it->second.end());
+      }
+   }
+
+   std::vector<RowContext> BuildGroupContexts(
+      const std::vector<UserInfo>& users,
+      const std::unordered_map<uint64_t, std::vector<DailyRow>>&        daily,
+      const std::unordered_map<uint64_t, std::vector<DealRow>>&         deals,
+      const std::unordered_map<uint64_t, std::vector<PositionRow>>&     positions,
+      const std::unordered_map<uint64_t, std::vector<OpenOrderRow>>&    open_orders,
+      const std::unordered_map<uint64_t, std::vector<HistoryOrderRow>>& history_orders,
+      const std::unordered_map<uint64_t, AccountInfo>&                  accounts,
+      const Predicate*                                                  row_pred)
+   {
+      //--- Stable group ordering = first-seen across `users` (post user-filter).
+      std::vector<std::string> group_order;
+      std::unordered_map<std::string, std::vector<uint64_t>> by_group;
+      std::unordered_map<std::string, const UserInfo*>       first_user;
+      for(const auto& u : users)
+      {
+         if(row_pred)
+         {
+            try { if(!FieldCatalog::EvalUserPredicate(*row_pred, u)) continue; }
+            catch(...) { continue; }
+         }
+         auto& bucket = by_group[u.group];
+         if(bucket.empty())
+         {
+            group_order.push_back(u.group);
+            first_user[u.group] = &u;
+         }
+         bucket.push_back(u.login);
+      }
+
+      std::vector<RowContext> out;
+      out.reserve(group_order.size());
+      for(const auto& g : group_order)
+      {
+         RowContext rc;
+         rc.pivot_text = g;
+         rc.pivot_num  = 0.0;
+         rc.user       = first_user[g];
+         if(rc.user)
+         {
+            auto ait = accounts.find(rc.user->login);
+            rc.account = (ait != accounts.end()) ? &ait->second : nullptr;
+         }
+         const auto& logins_in_bucket = by_group[g];
+         AppendForLogins(rc.daily_owned,          daily,          logins_in_bucket);
+         AppendForLogins(rc.deals_owned,          deals,          logins_in_bucket);
+         AppendForLogins(rc.positions_owned,      positions,      logins_in_bucket);
+         AppendForLogins(rc.open_orders_owned,    open_orders,    logins_in_bucket);
+         AppendForLogins(rc.history_orders_owned, history_orders, logins_in_bucket);
+         out.push_back(std::move(rc));
+      }
+      return out;
+   }
+
+   //--- Collect distinct symbols (first-seen order) from every loaded row
+   //--- that has a `.symbol` field, then emit one RowContext per symbol with
+   //--- per-symbol filtered owned vectors. user/account are null — user_*
+   //--- columns will fail their Need(...) and surface as blank cells.
+   std::vector<RowContext> BuildSymbolContexts(
+      const std::unordered_map<uint64_t, std::vector<DealRow>>&         deals,
+      const std::unordered_map<uint64_t, std::vector<PositionRow>>&     positions,
+      const std::unordered_map<uint64_t, std::vector<OpenOrderRow>>&    open_orders,
+      const std::unordered_map<uint64_t, std::vector<HistoryOrderRow>>& history_orders,
+      const Predicate*                                                  row_pred)
+   {
+      //--- row_pred (deal source) narrows which deals contribute to the symbol
+      //--- universe AND to each bucket's deals_owned. Positions/orders fall
+      //--- through unfiltered (documented "simple" behavior).
+      std::vector<std::string>                       order;
+      std::unordered_map<std::string, RowContext>    by_sym;
+      auto touch = [&](const std::string& s) -> RowContext& {
+         auto it = by_sym.find(s);
+         if(it == by_sym.end())
+         {
+            order.push_back(s);
+            RowContext rc; rc.pivot_text = s; rc.pivot_num = 0.0;
+            it = by_sym.emplace(s, std::move(rc)).first;
+         }
+         return it->second;
+      };
+      //--- Deals always go through DealMatches (no-op when row_pred is null).
+      for(const auto& kv : deals)
+         for(const auto& d : kv.second)
+            if(!d.symbol.empty() && DealMatches(row_pred, d))
+               touch(d.symbol).deals_owned.push_back(d);
+      //--- Positions/orders: with a row_pred, only attach to symbols a matching
+      //--- deal already opened (never introduce a symbol with no matching deal);
+      //--- without a row_pred, seed freely so position-only symbols still appear.
+      const bool gate = row_pred != nullptr;
+      for(const auto& kv : positions)
+         for(const auto& p : kv.second)
+         {
+            if(p.symbol.empty()) continue;
+            if(gate && !by_sym.count(p.symbol)) continue;
+            touch(p.symbol).positions_owned.push_back(p);
+         }
+      for(const auto& kv : open_orders)
+         for(const auto& o : kv.second)
+         {
+            if(o.symbol.empty()) continue;
+            if(gate && !by_sym.count(o.symbol)) continue;
+            touch(o.symbol).open_orders_owned.push_back(o);
+         }
+      for(const auto& kv : history_orders)
+         for(const auto& o : kv.second)
+         {
+            if(o.symbol.empty()) continue;
+            if(gate && !by_sym.count(o.symbol)) continue;
+            touch(o.symbol).history_orders_owned.push_back(o);
+         }
+
+      std::vector<RowContext> out;
+      out.reserve(order.size());
+      for(const auto& s : order) out.push_back(std::move(by_sym[s]));
+      return out;
+   }
+
+   //--- One RowContext per deal across every login. user/account taken from
+   //--- the deal's owning login so user_*/acc_* fields still resolve.
+   std::vector<RowContext> BuildTicketContexts(
+      const std::vector<UserInfo>& users,
+      const std::unordered_map<uint64_t, std::vector<DealRow>>& deals,
+      const std::unordered_map<uint64_t, AccountInfo>& accounts,
+      const Predicate*                                 row_pred)
+   {
+      std::unordered_map<uint64_t, const UserInfo*> user_by_login;
+      user_by_login.reserve(users.size());
+      for(const auto& u : users) user_by_login[u.login] = &u;
+
+      std::vector<RowContext> out;
+      for(const auto& kv : deals)
+      {
+         const uint64_t lg = kv.first;
+         auto uit = user_by_login.find(lg);
+         auto ait = accounts.find(lg);
+         for(const auto& d : kv.second)
+         {
+            if(!DealMatches(row_pred, d)) continue;
+            RowContext rc;
+            rc.pivot_text = std::to_string(d.ticket);
+            rc.pivot_num  = (double)d.ticket;
+            rc.user    = (uit != user_by_login.end()) ? uit->second : nullptr;
+            rc.account = (ait != accounts.end())      ? &ait->second : nullptr;
+            rc.deals_owned.push_back(d);
+            out.push_back(std::move(rc));
+         }
+      }
+      return out;
+   }
 }
 
 void Engine::Run(AppContext& ctx, int64_t job_id)
@@ -407,43 +670,71 @@ void Engine::Run(AppContext& ctx, int64_t job_id)
 
    JobRepo::UpdateStatus(*ctx.db, job_id, JobStatus::Running, 0.80);
 
-   //--- Per-login evaluation --------------------------------------
-   std::vector<std::vector<GenericWriter::Cell>> rows;
-   rows.reserve(users.size());
+   //--- Pivot-aware row generation --------------------------------
+   //--- First-column identifier source (login|group|symbol|ticket) decides
+   //--- the row dimension. Its optional `row_predicate` (set in the designer's
+   //--- "Filter rows" panel) is applied at bucket time so rejected rows never
+   //--- appear in the output. Login is the zero-copy fast path; the other
+   //--- three bucket data slices accordingly. See helpers above.
+   const Pivot pivot = DetectPivot(tpl);
+   const Predicate* row_pred = (!tpl.columns.empty() && tpl.columns[0].row_predicate)
+                                  ? tpl.columns[0].row_predicate.get()
+                                  : nullptr;
 
-   for(const auto& u : users)
+   std::vector<RowContext> contexts;
+   switch(pivot)
+   {
+      case Pivot::Login:
+         contexts = BuildLoginContexts(users, daily, deals, positions, open_orders, history_orders, accounts, row_pred);
+         break;
+      case Pivot::Group:
+         contexts = BuildGroupContexts(users, daily, deals, positions, open_orders, history_orders, accounts, row_pred);
+         break;
+      case Pivot::Symbol:
+         contexts = BuildSymbolContexts(deals, positions, open_orders, history_orders, row_pred);
+         break;
+      case Pivot::Ticket:
+         contexts = BuildTicketContexts(users, deals, accounts, row_pred);
+         break;
+   }
+
+   std::vector<std::vector<GenericWriter::Cell>> rows;
+   rows.reserve(contexts.size());
+
+   static const std::vector<DailyRow>          kEmptyDaily;
+   static const std::vector<DealRow>           kEmptyDeals;
+   static const std::vector<PositionRow>       kEmptyPos;
+   static const std::vector<OpenOrderRow>      kEmptyOO;
+   static const std::vector<HistoryOrderRow>   kEmptyOH;
+   static const AccountInfo                    kEmptyAcc;
+
+   for(const auto& rc : contexts)
    {
       EvalContext ec;
-      ec.user        = &u;
-      ec.daily       = daily.count(u.login)         ? &daily[u.login]          : nullptr;
-      ec.deals       = deals.count(u.login)         ? &deals[u.login]          : nullptr;
-      ec.positions   = positions.count(u.login)     ? &positions[u.login]      : nullptr;
-      ec.open_orders = open_orders.count(u.login)   ? &open_orders[u.login]    : nullptr;
-      ec.history_orders = history_orders.count(u.login) ? &history_orders[u.login] : nullptr;
-      ec.account     = accounts.count(u.login)      ? &accounts[u.login]       : nullptr;
-      ec.date_params = &date_params;
-      ec.filters     = &filters;
+      ec.user           = rc.user;
+      ec.account        = rc.account;
+      ec.daily          = rc.daily_view          ? rc.daily_view          : &rc.daily_owned;
+      ec.deals          = rc.deals_view          ? rc.deals_view          : &rc.deals_owned;
+      ec.positions      = rc.positions_view      ? rc.positions_view      : &rc.positions_owned;
+      ec.open_orders    = rc.open_orders_view    ? rc.open_orders_view    : &rc.open_orders_owned;
+      ec.history_orders = rc.history_orders_view ? rc.history_orders_view : &rc.history_orders_owned;
+      ec.date_params    = &date_params;
+      ec.filters        = &filters;
+      ec.pivot_key_text = rc.pivot_text;
+      ec.pivot_key_num  = rc.pivot_num;
 
-      //--- ensure non-null source ptrs even with empty vector when source was fetched
-      //--- (so evaluator's `Need(...)` doesn't trip on accounts with no deals).
-      static const std::vector<DailyRow>          kEmptyDaily;
-      static const std::vector<DealRow>           kEmptyDeals;
-      static const std::vector<PositionRow>       kEmptyPos;
-      static const std::vector<OpenOrderRow>      kEmptyOO;
-      static const std::vector<HistoryOrderRow>   kEmptyOH;
+      //--- preserve the "non-null vector if source was fetched" invariant —
+      //--- aggregators do Need(...) which throws on null but tolerates empty.
       if(!ec.daily          && need_daily) ec.daily          = &kEmptyDaily;
       if(!ec.deals          && need_deal)  ec.deals          = &kEmptyDeals;
       if(!ec.positions      && need_pos)   ec.positions      = &kEmptyPos;
       if(!ec.open_orders    && need_oo)    ec.open_orders    = &kEmptyOO;
       if(!ec.history_orders && need_oh)    ec.history_orders = &kEmptyOH;
-      static const AccountInfo kEmptyAcc;
       if(!ec.account        && need_acc)   ec.account        = &kEmptyAcc;
 
       std::vector<GenericWriter::Cell> row;
       row.reserve(tpl.columns.size());
 
-      //--- Backward column refs read from this map; we fill it left-to-right so
-      //--- a formula in col N can use values from col 0..N-1 via ExprNode::ColRef.
       std::unordered_map<std::string, double> col_values;
       col_values.reserve(tpl.columns.size());
       ec.column_values = &col_values;
@@ -467,7 +758,8 @@ void Engine::Run(AppContext& ctx, int64_t job_id)
             }
             catch(const std::exception& e)
             {
-               ctx.log->Warn("login=%llu column='%s': %s", (unsigned long long)u.login, c.key.c_str(), e.what());
+               ctx.log->Warn("pivot='%s' column='%s': %s",
+                             rc.pivot_text.c_str(), c.key.c_str(), e.what());
                row.push_back(GenericWriter::Cell::N());
             }
          }

@@ -943,6 +943,18 @@ namespace
             return std::string();
          });
 
+      //--- Pivot-only identifiers (read from EvalContext when first column
+      //--- drives a non-login bucketing — see Engine.cpp's Pivot detection).
+      Id("symbol", "Symbol",
+         [](const EvalContext& c) { return c.pivot_key_text; });
+      IdNumeric("ticket", "Ticket",
+         [](const EvalContext& c) { return c.pivot_key_num; },
+         [](const EvalContext& c) {
+            char b[32];
+            snprintf(b, sizeof(b), "%llu", (unsigned long long)c.pivot_key_num);
+            return std::string(b);
+         });
+
       //--- B : User Static Numeric -----------------------------------
       UserNum("user_balance",                  "User Balance",          "money", [](const UserInfo& u){ return u.balance; });
       UserNum("user_credit",                   "User Credit",           "money", [](const UserInfo& u){ return u.credit; });
