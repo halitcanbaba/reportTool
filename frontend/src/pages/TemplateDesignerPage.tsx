@@ -330,25 +330,23 @@ export function TemplateDesignerPage() {
               const isPivotRow = idx === 0;
               const pivot     = isPivotRow ? pivotInfo(c) : null;
               const predCount = countPredicate(c.row_predicate);
+              //--- Quiet ink accent (matches the rest of the app palette):
+              //--- a 2px darker left edge + a small grey label. No coloured
+              //--- banner; no overflow clipping for inner dropdowns.
               const liClass = isPivotRow
-                ? 'border-2 border-emerald-400 rounded bg-emerald-50/40 overflow-hidden shadow-sm'
+                ? 'border border-ink-200 border-l-2 border-l-ink-700 rounded p-3 bg-ink-100/50'
                 : 'border border-ink-200 rounded p-3 bg-ink-50/40';
               return (
               <li key={idx} className={liClass}>
                 {pivot && (
-                  <div className="bg-emerald-600 text-white px-3 py-1.5 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] uppercase tracking-widest font-bold opacity-90">Pivot dimension</span>
-                      <span className="text-sm font-semibold">·</span>
-                      <span className="text-sm font-mono font-semibold">{pivot.kind}</span>
-                      {!pivot.explicit && (
-                        <span className="text-[10px] opacity-80 italic">(default — falls back to login)</span>
-                      )}
-                    </div>
-                    <span className="text-[10px] opacity-80">Rows are grouped by this column</span>
+                  <div className="text-[10px] uppercase tracking-wide text-ink-500 mb-2 flex items-center gap-1.5">
+                    <span className="font-medium">Pivot</span>
+                    <span className="text-ink-300">·</span>
+                    <span className="font-mono font-semibold text-ink-800">{pivot.kind}</span>
+                    {!pivot.explicit && <span className="opacity-60 normal-case italic">(default)</span>}
+                    <span className="ml-auto opacity-50 normal-case">rows grouped by this column</span>
                   </div>
                 )}
-                <div className={isPivotRow ? 'p-3' : ''}>
                 <div className="flex items-center gap-3 mb-3">
                   <input className="input text-sm" style={{ width: 120 }}
                          value={c.key} onChange={e => updateColumn(idx, { key: e.target.value })} placeholder="key" />
@@ -371,6 +369,13 @@ export function TemplateDesignerPage() {
                   </select>
                   <button className="btn-secondary text-xs" onClick={() => moveColumn(idx, -1)} disabled={idx === 0}>↑</button>
                   <button className="btn-secondary text-xs" onClick={() => moveColumn(idx, +1)} disabled={idx === tpl.columns.length - 1}>↓</button>
+                  {c.kind === 'formula' && (
+                    <SaveAsBlueprint
+                      expr={c.expr ?? null}
+                      defaultName={c.label}
+                      defaultDateParams={dateParams}
+                    />
+                  )}
                   <button className="btn-secondary text-xs text-red-600" onClick={() => removeColumn(idx)}>×</button>
                 </div>
 
@@ -390,8 +395,8 @@ export function TemplateDesignerPage() {
                                 className={
                                   'text-xs px-2 py-1 rounded border font-medium ml-auto ' +
                                   (predCount > 0
-                                    ? 'bg-emerald-100 border-emerald-400 text-emerald-900 hover:bg-emerald-200'
-                                    : 'bg-white border-emerald-300 text-emerald-700 hover:bg-emerald-50')
+                                    ? 'bg-ink-100 border-ink-400 text-ink-900 hover:bg-ink-200'
+                                    : 'bg-white border-ink-300 text-ink-700 hover:bg-ink-50')
                                 }
                                 title={`Filter which ${pivot.kind} rows appear (applied before aggregation)`}
                                 onClick={() => setRowFilterOpen(o => !o)}>
@@ -402,7 +407,7 @@ export function TemplateDesignerPage() {
                       )}
                     </div>
                     {pivot && rowFilterOpen && catalog && (
-                      <div className="border border-emerald-200 bg-white rounded p-3">
+                      <div className="border border-ink-200 bg-white rounded p-3">
                         <div className="text-[11px] text-ink-500 mb-2">
                           Only {pivot.kind}s whose rows match this predicate are produced.
                           {' '}Fields drawn from <code className="font-mono">{PIVOT_PRED_SOURCE[pivot.kind]}</code> source.
@@ -420,13 +425,6 @@ export function TemplateDesignerPage() {
 
                 {c.kind === 'formula' && (
                   <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <SaveAsBlueprint
-                        expr={c.expr ?? null}
-                        defaultName={c.label}
-                        defaultDateParams={dateParams}
-                      />
-                    </div>
                     <FormulaEditor
                       chips={chipsByIdx[idx] ?? []}
                       expr={c.expr ?? null}
@@ -442,7 +440,6 @@ export function TemplateDesignerPage() {
                     />
                   </div>
                 )}
-                </div>
               </li>
               );
             })}
@@ -484,7 +481,9 @@ export function TemplateDesignerPage() {
   );
 }
 
-//--- Inline "Save as blueprint" popover -----------------------------
+//--- Tiny icon-button + name-only popover for saving the current formula as
+//--- a reusable blueprint. Description is left blank and date_params reuse
+//--- the template's — both stay editable later via the Blueprint list page.
 
 function SaveAsBlueprint({ expr, defaultName, defaultDateParams }: {
   expr: ExprNode | null;
@@ -493,26 +492,23 @@ function SaveAsBlueprint({ expr, defaultName, defaultDateParams }: {
 }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(defaultName);
-  const [description, setDescription] = useState('');
-  const [dpRaw, setDpRaw] = useState(defaultDateParams.join(', '));
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
   const disabled = !expr;
 
   const save = async () => {
-    if (!expr) return;
+    if (!expr || !name.trim()) return;
     setBusy(true); setMsg(null);
-    const params = dpRaw.split(',').map(s => s.trim()).filter(Boolean);
     try {
       await BlueprintsAPI.create({
         name: name.trim(),
-        description: description.trim(),
-        date_params: params,
+        description: '',
+        date_params: defaultDateParams,
         expr,
       });
       setMsg('Saved ✓');
-      setTimeout(() => { setOpen(false); setMsg(null); }, 800);
+      setTimeout(() => { setOpen(false); setMsg(null); }, 700);
     } catch (e: any) {
       setMsg(e.message ?? 'save failed');
     } finally { setBusy(false); }
@@ -521,33 +517,37 @@ function SaveAsBlueprint({ expr, defaultName, defaultDateParams }: {
   return (
     <span className="relative inline-flex">
       <button type="button"
-              className="btn-secondary text-xs"
+              className="btn-secondary text-xs px-2 py-1 flex items-center"
               disabled={disabled}
-              title={disabled ? 'Build a formula first' : 'Save this formula as a reusable blueprint'}
-              onClick={() => setOpen(o => !o)}>
-        Save as blueprint…
+              title={disabled ? 'Build a formula first' : 'Save as blueprint'}
+              onClick={() => { setName(defaultName); setMsg(null); setOpen(o => !o); }}>
+        {/* bookmark / save-for-later icon */}
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+        </svg>
       </button>
       {open && (
-        <div className="absolute z-30 top-7 left-0 w-80 bg-white border border-ink-200 rounded shadow-lg p-3 space-y-2"
+        <div className="absolute z-30 top-7 right-0 w-64 bg-white border border-ink-200 rounded shadow-lg p-3 space-y-2"
              onMouseDown={e => e.stopPropagation()}>
-          <div className="text-sm font-semibold">Save formula as blueprint</div>
-          <div>
-            <label className="label">Name</label>
-            <input className="input text-xs" value={name} onChange={e => setName(e.target.value)} placeholder="Net Deposits" />
-          </div>
-          <div>
-            <label className="label">Description (optional)</label>
-            <input className="input text-xs" value={description} onChange={e => setDescription(e.target.value)} />
-          </div>
-          <div>
-            <label className="label">Date params</label>
-            <input className="input font-mono text-xs" value={dpRaw} onChange={e => setDpRaw(e.target.value)} />
-            <div className="text-[10px] text-ink-500 mt-1">Names used inside the formula; used for remapping on insert.</div>
-          </div>
-          <div className="flex items-center justify-end gap-2">
-            {msg && <span className={'text-xs mr-auto ' + (msg.startsWith('Saved') ? 'text-emerald-700' : 'text-red-600 font-mono')}>{msg}</span>}
-            <button type="button" className="btn-secondary text-xs" onClick={() => setOpen(false)}>Cancel</button>
-            <button type="button" className="btn-primary text-xs" disabled={busy || !name.trim()} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
+          <div className="text-xs font-semibold text-ink-700">Save as blueprint</div>
+          <input className="input text-xs"
+                 autoFocus
+                 placeholder="Name it (e.g. Net Deposits)"
+                 value={name}
+                 onChange={e => setName(e.target.value)}
+                 onKeyDown={e => {
+                   if (e.key === 'Enter') { e.preventDefault(); save(); }
+                   if (e.key === 'Escape') setOpen(false);
+                 }} />
+          <div className="flex items-center justify-between gap-2">
+            {msg && <span className={'text-[11px] ' + (msg.startsWith('Saved') ? 'text-emerald-700' : 'text-red-600 font-mono')}>{msg}</span>}
+            <div className="flex gap-2 ml-auto">
+              <button type="button" className="btn-secondary text-xs px-2 py-1" onClick={() => setOpen(false)}>Cancel</button>
+              <button type="button" className="btn-primary text-xs px-2 py-1" disabled={busy || !name.trim()} onClick={save}>
+                {busy ? 'Saving…' : 'Save'}
+              </button>
+            </div>
           </div>
         </div>
       )}

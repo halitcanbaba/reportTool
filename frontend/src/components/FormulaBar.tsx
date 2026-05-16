@@ -3,7 +3,7 @@ import { useDroppable } from '@dnd-kit/core';
 import type { Column, FieldCatalog, FieldDef, Predicate } from '../types';
 import type { Chip, ChipOp } from '../lib/exprChips';
 import { astToChips, astToText, chipsToAst, newChipId } from '../lib/exprChips';
-import { FieldPicker } from './FieldPicker';
+import { FieldPickerBody } from './FieldPicker';
 import { PredicateEditor } from './PredicateEditor';
 import { BlueprintPicker } from './BlueprintPicker';
 
@@ -97,6 +97,7 @@ function InsertionSlot({ index, path, catalog, dateParams, refCandidates, onInse
   onInsert: (c: Chip) => void;
   onInsertMany: (cs: Chip[]) => void;
 }) {
+  void onInsertMany;
   const [open, setOpen] = useState(false);
   const dropId = `${path}:slot:${index}`;
   const { setNodeRef, isOver } = useDroppable({ id: dropId });
@@ -111,63 +112,15 @@ function InsertionSlot({ index, path, catalog, dateParams, refCandidates, onInse
               title="insert here"
               onClick={() => setOpen(o => !o)}>+</button>
       {open && (
-        <span className="absolute z-30 top-7 left-0 bg-white border border-ink-200 rounded shadow-lg p-2 w-80 flex flex-col gap-2"
+        <span className="absolute z-30 top-7 left-0 w-96 bg-white border border-ink-200 rounded shadow-lg overflow-hidden"
               onMouseDown={e => e.stopPropagation()}>
-          <div className="flex items-center gap-1 flex-wrap">
-            <FieldPicker
-              catalog={catalog}
-              filter={numericOnly}
-              placeholder="+ field"
-              onPick={(f) => { onInsert(makeFieldChip(f, dateParams)); setOpen(false); }}
-            />
-            <button type="button" className="btn-secondary text-xs px-2 py-1"
-                    onClick={() => { onInsert({ id: newChipId(), kind: 'literal', value: 0 }); setOpen(false); }}>
-              123
-            </button>
-            {(['+','-','*','/'] as ChipOp[]).map(op => (
-              <button key={op} type="button" className="btn-secondary text-xs px-2 py-1 font-mono"
-                      onClick={() => { onInsert({ id: newChipId(), kind: 'op', op }); setOpen(false); }}>
-                {op === '*' ? '×' : op === '/' ? '÷' : op === '-' ? '−' : op}
-              </button>
-            ))}
-            <button type="button" className="btn-secondary text-xs px-2 py-1 font-mono"
-                    onClick={() => { onInsert({ id: newChipId(), kind: 'lparen' }); setOpen(false); }}>(</button>
-            <button type="button" className="btn-secondary text-xs px-2 py-1 font-mono"
-                    onClick={() => { onInsert({ id: newChipId(), kind: 'rparen' }); setOpen(false); }}>)</button>
-            <button type="button" className="text-xs text-ink-500 px-1 ml-auto" onClick={() => setOpen(false)}>esc</button>
-          </div>
-          {refCandidates.length > 0 && (
-            <div className="border-t border-ink-100 pt-2">
-              <div className="text-[10px] uppercase font-semibold text-ink-500 mb-1">Columns in this template</div>
-              <div className="max-h-40 overflow-auto -mx-1">
-                {refCandidates.map(col => (
-                  <button key={col.key} type="button"
-                          className="w-full text-left px-2 py-1 hover:bg-ink-50 flex items-center justify-between gap-2"
-                          title={`Insert reference to ${col.key}`}
-                          onClick={() => { onInsert({ id: newChipId(), kind: 'col_ref', key: col.key }); setOpen(false); }}>
-                    <span className="text-xs">
-                      <code className="font-mono text-violet-700">@{col.key}</code>
-                      <span className="ml-2 text-ink-500">{col.label}</span>
-                    </span>
-                    <span className="text-[10px] text-ink-400 font-mono">{col.kind}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-          <div className="border-t border-ink-100 pt-2">
-            <BlueprintPicker
-              templateDateParams={dateParams}
-              onInsert={(expr, name) => {
-                //--- Wrap the blueprint's chips in a single named blueprint chip
-                //--- so the formula bar shows the blueprint name instead of the
-                //--- expanded expression. (Identity is in-memory only — on save
-                //--- + reload it round-trips through plain chips.)
-                onInsert({ id: newChipId(), kind: 'blueprint', name, inner: astToChips(expr) });
-                setOpen(false);
-              }}
-            />
-          </div>
+          <InsertPicker
+            catalog={catalog}
+            dateParams={dateParams}
+            refCandidates={refCandidates}
+            onInsert={(c) => { onInsert(c); setOpen(false); }}
+            onClose={() => setOpen(false)}
+          />
         </span>
       )}
     </span>
@@ -353,6 +306,150 @@ function DeleteX({ onClick }: { onClick: () => void }) {
             className="text-red-500 hover:text-red-700 text-xs ml-1 px-0.5"
             title="remove"
             onClick={onClick}>×</button>
+  );
+}
+
+//--- Tabbed insert picker used inside the `+` popover. Field tab is the
+//--- default and most common path; Col / Blueprint / Math are alongside it.
+//--- One rectangular surface, no nested dropdowns, ink-palette styling.
+type InsertTab = 'field' | 'column' | 'blueprint' | 'math';
+
+function InsertPicker({ catalog, dateParams, refCandidates, onInsert, onClose }: {
+  catalog: FieldCatalog;
+  dateParams: string[];
+  refCandidates: Column[];
+  onInsert: (c: Chip) => void;
+  onClose: () => void;
+}) {
+  const [tab, setTab] = useState<InsertTab>('field');
+
+  const TabBtn = ({ id, label }: { id: InsertTab; label: string }) => (
+    <button type="button"
+            onClick={() => setTab(id)}
+            className={
+              'text-xs px-2.5 py-1 rounded ' +
+              (tab === id
+                ? 'bg-ink-900 text-white'
+                : 'bg-ink-100 text-ink-700 hover:bg-ink-200')
+            }>
+      {label}
+    </button>
+  );
+
+  return (
+    <div className="flex flex-col">
+      {/* Tab bar */}
+      <div className="flex items-center gap-1 p-2 border-b border-ink-100 bg-ink-50/40">
+        <TabBtn id="field"     label="Field" />
+        <TabBtn id="column"    label="Col" />
+        <TabBtn id="blueprint" label="Blueprint" />
+        <TabBtn id="math"      label="Math" />
+        <button type="button" className="text-xs text-ink-500 hover:text-ink-900 px-1 ml-auto"
+                onClick={onClose}>
+          esc
+        </button>
+      </div>
+
+      {/* Active tab body */}
+      {tab === 'field' && (
+        <FieldPickerBody
+          catalog={catalog}
+          filter={numericOnly}
+          onPick={(f) => onInsert(makeFieldChip(f, dateParams))}
+        />
+      )}
+
+      {tab === 'column' && (
+        <ColumnTabBody
+          columns={refCandidates}
+          onPick={(col) => onInsert({ id: newChipId(), kind: 'col_ref', key: col.key })}
+        />
+      )}
+
+      {tab === 'blueprint' && (
+        <div className="p-2 max-h-80 overflow-auto">
+          <BlueprintPicker
+            templateDateParams={dateParams}
+            onInsert={(expr, name) => {
+              //--- One blueprint chip with name + inner chips so the bar
+              //--- shows the name instead of the expanded expression.
+              onInsert({ id: newChipId(), kind: 'blueprint', name, inner: astToChips(expr) });
+            }}
+          />
+        </div>
+      )}
+
+      {tab === 'math' && (
+        <MathTabBody onInsert={onInsert} />
+      )}
+    </div>
+  );
+}
+
+//--- Column tab body: list of refCandidates as @col_key rows. Same row shape
+//--- as field rows so the visual rhythm stays consistent across tabs.
+function ColumnTabBody({ columns, onPick }: { columns: Column[]; onPick: (c: Column) => void }) {
+  if (columns.length === 0) {
+    return (
+      <div className="px-3 py-6 text-[11px] text-ink-400 italic text-center">
+        No earlier columns to reference yet.
+        <div className="text-[10px] text-ink-400 mt-1 not-italic">
+          Define an identifier or numeric column above this one first.
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="max-h-80 overflow-auto">
+      <div className="px-3 py-1.5 text-[11px] uppercase font-semibold text-ink-500 bg-ink-50 border-b border-ink-100 sticky top-0">
+        Columns in this template
+      </div>
+      {columns.map(col => (
+        <button key={col.key} type="button"
+                onClick={() => onPick(col)}
+                className="w-full text-left px-3 py-1.5 hover:bg-ink-50 flex items-center justify-between gap-2 border-b border-ink-50 last:border-0">
+          <span className="text-sm">
+            <code className="font-mono text-xs text-violet-700">@{col.key}</code>
+            <span className="ml-2 text-ink-500 text-xs">{col.label}</span>
+          </span>
+          <span className="text-xs text-ink-400 font-mono">· {col.kind}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+//--- Math tab body: keypad-style grid of number / operators / parens.
+//--- Bigger square buttons feel calmer than the cramped inline strip.
+function MathTabBody({ onInsert }: { onInsert: (c: Chip) => void }) {
+  const Key = ({ label, onClick, mono = true }: { label: string; onClick: () => void; mono?: boolean }) => (
+    <button type="button" onClick={onClick}
+            className={
+              'h-10 rounded border border-ink-200 bg-white hover:bg-ink-50 text-ink-900 text-sm ' +
+              (mono ? 'font-mono' : '')
+            }>
+      {label}
+    </button>
+  );
+  const ops: { sym: string; op: ChipOp }[] = [
+    { sym: '+', op: '+' }, { sym: '−', op: '-' }, { sym: '×', op: '*' }, { sym: '÷', op: '/' },
+  ];
+  return (
+    <div className="p-3 space-y-2">
+      <div className="text-[11px] uppercase font-semibold text-ink-500">Numbers · grouping</div>
+      <div className="grid grid-cols-3 gap-2">
+        <Key label="123" mono={false} onClick={() => onInsert({ id: newChipId(), kind: 'literal', value: 0 })} />
+        <Key label="("  onClick={() => onInsert({ id: newChipId(), kind: 'lparen' })} />
+        <Key label=")"  onClick={() => onInsert({ id: newChipId(), kind: 'rparen' })} />
+      </div>
+      <div className="text-[11px] uppercase font-semibold text-ink-500 pt-1">Operators</div>
+      <div className="grid grid-cols-4 gap-2">
+        {ops.map(({ sym, op }) => (
+          <Key key={op} label={sym}
+               onClick={() => onInsert({ id: newChipId(), kind: 'op', op })} />
+        ))}
+      </div>
+    </div>
   );
 }
 

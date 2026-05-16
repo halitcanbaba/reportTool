@@ -2,11 +2,12 @@ import { useMemo, useState } from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import type { FieldCatalog, FieldDef } from '../types';
 
-type Props = {
+type WrapperProps = {
   catalog: FieldCatalog;
   filter?: (f: FieldDef) => boolean;     // restrict (e.g. numeric only)
   onPick:   (f: FieldDef) => void;        // click-to-pick (fallback / fast path)
   placeholder?: string;
+  defaultOpen?: boolean;                  // start with the dropdown already open
 };
 
 //--- One draggable row inside the picker.
@@ -37,10 +38,15 @@ function DraggableField({ f, onPick }: { f: FieldDef; onPick: (f: FieldDef) => v
   );
 }
 
-export function FieldPicker({ catalog, filter, onPick, placeholder = 'pick field…' }: Props) {
-  const [open, setOpen] = useState(false);
+//--- Standalone body: search + categorized list, no toggle button. Used by
+//--- both the FieldPicker dropdown wrapper and the InsertPicker tabbed UI.
+export function FieldPickerBody({ catalog, filter, onPick, autoFocus = true }: {
+  catalog: FieldCatalog;
+  filter?: (f: FieldDef) => boolean;
+  onPick: (f: FieldDef) => void;
+  autoFocus?: boolean;
+}) {
   const [q, setQ] = useState('');
-
   const grouped = useMemo(() => {
     const fields = (catalog.fields || []).filter(f => !filter || filter(f));
     const filtered = q.trim()
@@ -57,7 +63,34 @@ export function FieldPicker({ catalog, filter, onPick, placeholder = 'pick field
     return m;
   }, [catalog, filter, q]);
 
-  const pickAndClose = (f: FieldDef) => { onPick(f); setOpen(false); setQ(''); };
+  return (
+    <div className="flex flex-col">
+      <div className="p-2 border-b border-ink-100 sticky top-0 bg-white z-10">
+        <input className="input text-xs" autoFocus={autoFocus} placeholder="search fields…"
+               value={q} onChange={e => setQ(e.target.value)} />
+        <div className="text-[10px] text-ink-400 mt-1">click to insert, or drag onto a slot</div>
+      </div>
+      <div className="max-h-80 overflow-auto">
+        {catalog.categories.map(cat => {
+          const list = grouped.get(cat.id);
+          if (!list || list.length === 0) return null;
+          return (
+            <div key={cat.id} className="border-b border-ink-50 last:border-0">
+              <div className="px-3 py-1.5 text-[11px] uppercase font-semibold text-ink-500 bg-ink-50">{cat.id} · {cat.label}</div>
+              <ul>
+                {list.map(f => <li key={f.name}><DraggableField f={f} onPick={onPick} /></li>)}
+              </ul>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+export function FieldPicker({ catalog, filter, onPick, placeholder = 'pick field…', defaultOpen = false }: WrapperProps) {
+  const [open, setOpen] = useState(defaultOpen);
+  const pickAndClose = (f: FieldDef) => { onPick(f); setOpen(false); };
 
   return (
     <div className="relative inline-block">
@@ -65,24 +98,8 @@ export function FieldPicker({ catalog, filter, onPick, placeholder = 'pick field
         {open ? 'Close' : placeholder}
       </button>
       {open && (
-        <div className="absolute z-20 mt-1 w-96 max-h-96 overflow-auto bg-white border border-ink-200 rounded shadow-lg">
-          <div className="p-2 border-b border-ink-100 sticky top-0 bg-white">
-            <input className="input text-xs" autoFocus placeholder="search fields…"
-                   value={q} onChange={e => setQ(e.target.value)} />
-            <div className="text-[10px] text-ink-400 mt-1">click to insert, or drag onto a slot</div>
-          </div>
-          {catalog.categories.map(cat => {
-            const list = grouped.get(cat.id);
-            if (!list || list.length === 0) return null;
-            return (
-              <div key={cat.id} className="border-b border-ink-50">
-                <div className="px-3 py-2 text-xs uppercase font-semibold text-ink-500 bg-ink-50">{cat.id} — {cat.label}</div>
-                <ul>
-                  {list.map(f => <li key={f.name}><DraggableField f={f} onPick={pickAndClose} /></li>)}
-                </ul>
-              </div>
-            );
-          })}
+        <div className="absolute z-20 mt-1 w-96 bg-white border border-ink-200 rounded shadow-lg overflow-hidden">
+          <FieldPickerBody catalog={catalog} filter={filter} onPick={pickAndClose} />
         </div>
       )}
     </div>
