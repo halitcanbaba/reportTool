@@ -3,7 +3,7 @@
 
 namespace
 {
-   constexpr int kCurrentSchemaVersion = 7;
+   constexpr int kCurrentSchemaVersion = 8;
 
    //--- Tables that survive every version (managers, regex_filters,
    //--- daily_cache, deal_cache). These are idempotent.
@@ -292,6 +292,15 @@ namespace
       if(!db.Exec("UPDATE report_templates SET default_top_n=0 WHERE default_top_n=20", err)) return false;
       return WriteVersion(db, 7, err);
    }
+
+   //--- v7 → v8: add `delivery_format` to schedules so each schedule can
+   //--- choose between sending the CSV file or a brief text summary.
+   bool MigrateToV8(SqliteDb& db, std::string* err)
+   {
+      if(!db.Exec("ALTER TABLE schedules ADD COLUMN delivery_format TEXT NOT NULL DEFAULT 'csv'", err))
+         return false;
+      return WriteVersion(db, 8, err);
+   }
 }
 
 bool Schema::Apply(SqliteDb& db, std::string* err)
@@ -311,6 +320,9 @@ bool Schema::Apply(SqliteDb& db, std::string* err)
       if(!db.Exec("ALTER TABLE account_filters ADD COLUMN user_predicate_json TEXT NOT NULL DEFAULT ''", err)) return false;
       if(!db.Exec(kV5Tables, err)) return false;
       if(!db.Exec(kV6Tables, err)) return false;
+      //--- v8 column on the fresh-install path (kV5Tables hasn't been
+      //--- consolidated yet — kept as ALTER to mirror the migration).
+      if(!db.Exec("ALTER TABLE schedules ADD COLUMN delivery_format TEXT NOT NULL DEFAULT 'csv'", err)) return false;
       return WriteVersion(db, kCurrentSchemaVersion, err);
    }
    if(v < 2)
@@ -336,6 +348,10 @@ bool Schema::Apply(SqliteDb& db, std::string* err)
    if(v < 7)
    {
       if(!MigrateToV7(db, err)) return false;
+   }
+   if(v < 8)
+   {
+      if(!MigrateToV8(db, err)) return false;
    }
    //--- v >= current: no-op.
    return true;

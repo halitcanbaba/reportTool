@@ -915,12 +915,14 @@ namespace
       s.last_error       = st.ColText(15);
       s.created_at       = st.ColI64(16);
       s.updated_at       = st.ColI64(17);
+      s.delivery_format  = st.ColText(18);
+      if(s.delivery_format.empty()) s.delivery_format = "csv";
    }
 
    const char* kScheduleSelectCols =
       "id,name,ready_made_id,frequency,time_hour,time_minute,day_of_week,day_of_month,"
       "every_n_hours,telegram_chat_id,enabled,next_run_at,last_run_at,last_status,"
-      "last_job_id,last_error,created_at,updated_at";
+      "last_job_id,last_error,created_at,updated_at,delivery_format";
 }
 
 std::vector<ScheduleEntry> ScheduleRepo::ListAll(SqliteDb& db)
@@ -953,8 +955,8 @@ int64_t ScheduleRepo::Insert(SqliteDb& db, ScheduleEntry& s)
    SqliteStmt st(db,
       "INSERT INTO schedules(name,ready_made_id,frequency,time_hour,time_minute,"
       "day_of_week,day_of_month,every_n_hours,telegram_chat_id,enabled,next_run_at,"
-      "last_run_at,last_status,last_error,created_at,updated_at) "
-      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+      "last_run_at,last_status,last_error,created_at,updated_at,delivery_format) "
+      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
    st.BindText(1,  s.name);
    st.BindI64 (2,  s.ready_made_id);
    st.BindText(3,  s.frequency.empty() ? "daily" : s.frequency);
@@ -971,6 +973,7 @@ int64_t ScheduleRepo::Insert(SqliteDb& db, ScheduleEntry& s)
    st.BindText(14, s.last_error);
    st.BindI64 (15, now);
    st.BindI64 (16, now);
+   st.BindText(17, s.delivery_format.empty() ? "csv" : s.delivery_format);
    st.Step();
    s.id = db.LastInsertRowid();
    s.created_at = s.updated_at = now;
@@ -984,7 +987,7 @@ bool ScheduleRepo::Update(SqliteDb& db, ScheduleEntry& s)
    SqliteStmt st(db,
       "UPDATE schedules SET name=?,ready_made_id=?,frequency=?,time_hour=?,time_minute=?,"
       "day_of_week=?,day_of_month=?,every_n_hours=?,telegram_chat_id=?,enabled=?,"
-      "next_run_at=?,updated_at=? WHERE id=?");
+      "next_run_at=?,updated_at=?,delivery_format=? WHERE id=?");
    st.BindText(1,  s.name);
    st.BindI64 (2,  s.ready_made_id);
    st.BindText(3,  s.frequency.empty() ? "daily" : s.frequency);
@@ -997,7 +1000,8 @@ bool ScheduleRepo::Update(SqliteDb& db, ScheduleEntry& s)
    st.BindInt (10, s.enabled ? 1 : 0);
    st.BindI64 (11, s.next_run_at);
    st.BindI64 (12, now);
-   st.BindI64 (13, s.id);
+   st.BindText(13, s.delivery_format.empty() ? "csv" : s.delivery_format);
+   st.BindI64 (14, s.id);
    st.Step();
    s.updated_at = now;
    return true;

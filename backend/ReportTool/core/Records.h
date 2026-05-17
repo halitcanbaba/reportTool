@@ -498,6 +498,7 @@ struct ScheduleEntry
    int          every_n_hours       = 1;    // hourly
 
    std::string  telegram_chat_id;           // empty → fallback to global default
+   std::string  delivery_format     = "csv"; // "csv" (SendDocument) | "text" (SendMessage summary)
    bool         enabled             = true;
 
    int64_t      next_run_at         = 0;    // UTC unix

@@ -6,6 +6,8 @@
 #include "ReportRoutes.h"
 #include "../third_party/httplib.h"
 #include "../db/Repos.h"
+#include "../core/TelegramClient.h"
+#include "../core/Crypto.h"
 #include "JobRunner.h"
 #include <fstream>
 #include <sstream>
@@ -19,6 +21,25 @@ namespace
    {
       res.status = status;
       res.set_content(json{ {"error", msg} }.dump(), "application/json");
+   }
+
+   //--- Decrypt + read the saved Telegram bot token (empty if not configured).
+   //--- Same pattern as Scheduler.cpp::LoadBotToken.
+   std::string LoadBotToken(SqliteDb& db)
+   {
+      const std::string enc = SettingsRepo::Get(db, "telegram_bot_token_encrypted");
+      if(enc.empty()) return "";
+      std::string plain;
+      if(!Crypto::DecryptB64(enc, &plain)) return "";
+      return plain;
+   }
+
+   //--- Clamp a UTF-8-ish string to at most `max_bytes` bytes.  Telegram caps
+   //--- captions at 1024 and message text at 4096; we already cap on the
+   //--- frontend but enforce server-side as defense-in-depth.
+   std::string Clamp(const std::string& s, size_t max_bytes)
+   {
+      return s.size() <= max_bytes ? s : s.substr(0, max_bytes);
    }
 
    //--- Resolve template names for a job list (one extra lookup per unique template).
@@ -146,5 +167,80 @@ void ReportRoutes::Register(httplib::Server& srv, AppContext* ctx)
       stream_file(res, path,
                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                   j->xlsx_filename);
+   });
+
+   //--- Manual Telegram delivery for a finished job. Multipart form fields:
+   //---   kind     : "document" (default) | "photo" | "text"
+   //---   chat_id  : optional; falls back to telegram_default_chat_id
+   //---   caption  : optional, ≤ 1024 chars (document / photo)
+   //---   text     : required when kind=text, ≤ 4096 chars
+   //---   file     : the bytes (document / photo); uses .content / .filename / .content_type
+   srv.Post(R"(/api/reports/jobs/(\d+)/send-telegram)",
+            [ctx](const httplib::Request& req, httplib::Response& res){
+      const int64_t id = std::stoll(req.matches[1]);
+      auto j = JobRepo::Get(*ctx->db, id);
+      if(!j) { SendError(res, 404, "job not found"); return; }
+
+      const std::string token = LoadBotToken(*ctx->db);
+      if(token.empty()) { SendError(res, 400, "bot token not configured"); return; }
+
+      auto form_value = [&](const std::string& name) -> std::string {
+         auto it = req.params.find(name);
+         if(it != req.params.end()) return it->second;
+         if(req.has_file(name)) return req.get_file_value(name).content;
+         return "";
+      };
+
+      std::string chat = form_value("chat_id");
+      if(chat.empty()) chat = SettingsRepo::Get(*ctx->db, "telegram_default_chat_id");
+      if(chat.empty()) { SendError(res, 400, "no chat_id (set per-message or global default)"); return; }
+
+      std::string kind = form_value("kind");
+      if(kind.empty()) kind = "document";
+
+      const std::string caption = Clamp(form_value("caption"), 1024);
+
+      TelegramClient::Result r;
+      if(kind == "text")
+      {
+         const std::string text = Clamp(form_value("text"), 4096);
+         if(text.empty()) { SendError(res, 400, "text required for kind=text"); return; }
+         r = TelegramClient::SendMessage(token, chat, text);
+      }
+      else if(kind == "photo" || kind == "document")
+      {
+         if(!req.has_file("file")) { SendError(res, 400, "file part required"); return; }
+         const auto& fv = req.get_file_value("file");
+         const std::string filename = fv.filename.empty() ? std::string("report") : fv.filename;
+         if(kind == "photo")
+         {
+            r = TelegramClient::SendPhotoBytes(token, chat, fv.content, filename, caption);
+         }
+         else
+         {
+            const std::string mime = fv.content_type.empty()
+                                       ? std::string("application/octet-stream")
+                                       : fv.content_type;
+            r = TelegramClient::SendDocumentBytes(token, chat, fv.content, filename, mime, caption);
+         }
+      }
+      else
+      {
+         SendError(res, 400, "kind must be document | photo | text");
+         return;
+      }
+
+      if(r.ok)
+      {
+         res.set_content(json{ {"ok", true}, {"chat_id", chat} }.dump(), "application/json");
+      }
+      else
+      {
+         //--- 502 Bad Gateway communicates "we tried, the upstream said no".
+         res.status = 502;
+         res.set_content(json{ {"ok", false}, {"error", r.error},
+                               {"http_status", r.http_status} }.dump(),
+                         "application/json");
+      }
    });
 }

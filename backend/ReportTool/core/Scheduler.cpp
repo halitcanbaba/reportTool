@@ -348,21 +348,45 @@ void Scheduler::TickOnce()
          continue;
       }
 
-      std::string caption = sch.name + " — job #" + std::to_string(job->id);
-      if(job->csv_filename.empty())
-      {
-         //--- No CSV — send a summary message only.
-         auto r = TelegramClient::SendMessage(token, chat, caption + " (no CSV)");
-         ScheduleRepo::UpdateDelivery(*m_ctx->db, sch.id, r.ok ? "completed" : "failed", r.error);
-         continue;
-      }
+      const std::string caption = sch.name + " — job #" + std::to_string(job->id);
+      const std::string fmt = sch.delivery_format.empty() ? std::string("csv")
+                                                          : sch.delivery_format;
 
-      const std::string csv_path = job->output_dir + "/" + job->csv_filename;
-      const auto r = TelegramClient::SendDocument(token, chat, csv_path,
-                                                  job->csv_filename, caption);
+      TelegramClient::Result r;
+      if(fmt == "text")
+      {
+         //--- Brief summary message; no file attached. Includes total rows
+         //--- when the preview JSON is available, otherwise just the caption.
+         std::string text = caption;
+         if(!job->summary_json.empty())
+         {
+            auto j = nlohmann::json::parse(job->summary_json, nullptr, false);
+            if(!j.is_discarded())
+            {
+               const int total = j.value("total_logins", 0);
+               const int rows  = j.value("row_count",    0);
+               text += "\nRows: " + std::to_string(rows)
+                     + " · logins: " + std::to_string(total);
+            }
+         }
+         r = TelegramClient::SendMessage(token, chat, text);
+      }
+      else if(job->csv_filename.empty())
+      {
+         //--- csv requested but no file produced — fall back to text.
+         r = TelegramClient::SendMessage(token, chat, caption + " (no CSV)");
+      }
+      else
+      {
+         //--- Default `csv` path: attach the CSV file.
+         const std::string csv_path = job->output_dir + "/" + job->csv_filename;
+         r = TelegramClient::SendDocument(token, chat, csv_path,
+                                           job->csv_filename, caption);
+      }
       ScheduleRepo::UpdateDelivery(*m_ctx->db, sch.id, r.ok ? "completed" : "failed", r.error);
-      m_ctx->log->Info("Schedule %lld delivery: %s (chat=%s)",
-                       (long long)sch.id, r.ok ? "ok" : r.error.c_str(), chat.c_str());
+      m_ctx->log->Info("Schedule %lld delivery [%s]: %s (chat=%s)",
+                       (long long)sch.id, fmt.c_str(),
+                       r.ok ? "ok" : r.error.c_str(), chat.c_str());
    }
 
    //--- 2. Due dispatch: for each enabled schedule whose next_run_at <= now,

@@ -31,6 +31,7 @@ namespace
          { "day_of_month",      s.day_of_month },
          { "every_n_hours",     s.every_n_hours },
          { "telegram_chat_id",  s.telegram_chat_id },
+         { "delivery_format",   s.delivery_format.empty() ? std::string("csv") : s.delivery_format },
          { "enabled",           s.enabled },
          { "next_run_at",       s.next_run_at },
          { "last_run_at",       s.last_run_at },
@@ -58,6 +59,9 @@ namespace
          s->day_of_month     = j.value("day_of_month",     1);
          s->every_n_hours    = j.value("every_n_hours",    1);
          s->telegram_chat_id = j.value("telegram_chat_id", std::string());
+         s->delivery_format  = j.value("delivery_format",  std::string("csv"));
+         if(s->delivery_format != "csv" && s->delivery_format != "text")
+            { *err = "delivery_format must be 'csv' or 'text'"; return false; }
          s->enabled          = j.value("enabled",          true);
       }
       catch(const std::exception& e) { *err = e.what(); return false; }

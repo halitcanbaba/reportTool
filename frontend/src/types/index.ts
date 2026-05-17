@@ -215,6 +215,7 @@ export type ReadyMadeRunRequest = {
 //--- Scheduler -----------------------------------------------------
 
 export type ScheduleFrequency = 'daily' | 'weekly' | 'monthly' | 'hourly';
+export type ScheduleDeliveryFormat = 'csv' | 'text';
 
 export type ScheduleEntry = {
   id: number;
@@ -227,6 +228,7 @@ export type ScheduleEntry = {
   day_of_month: number;
   every_n_hours: number;
   telegram_chat_id: string;
+  delivery_format: ScheduleDeliveryFormat;
   enabled: boolean;
   next_run_at: number;
   last_run_at: number;

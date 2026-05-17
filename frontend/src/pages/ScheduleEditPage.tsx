@@ -15,6 +15,7 @@ const empty: ScheduleEntryInput = {
   day_of_month: 1,
   every_n_hours: 1,
   telegram_chat_id: '',
+  delivery_format: 'csv',
   enabled: true,
 };
 
@@ -47,6 +48,7 @@ export function ScheduleEditPage() {
         day_of_month: s.day_of_month,
         every_n_hours: s.every_n_hours,
         telegram_chat_id: s.telegram_chat_id,
+        delivery_format: s.delivery_format ?? 'csv',
         enabled: s.enabled,
       });
     });
@@ -173,13 +175,27 @@ export function ScheduleEditPage() {
 
       <div className="card p-5 space-y-3">
         <div className="text-sm font-semibold text-ink-700 uppercase tracking-wide">Delivery</div>
-        <div>
-          <label className="label">Telegram chat ID (override)</label>
-          <input className="input font-mono text-xs" value={form.telegram_chat_id}
-                 onChange={e => update('telegram_chat_id', e.target.value)}
-                 placeholder="leave blank to use default" />
-          <div className="text-[11px] text-ink-500 mt-1">
-            Channels start with <code>-100…</code>. Empty = use the global default configured on the Scheduler page.
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Send as</label>
+            <select className="input"
+                    value={form.delivery_format}
+                    onChange={e => update('delivery_format', e.target.value as 'csv' | 'text')}>
+              <option value="csv">CSV file</option>
+              <option value="text">Text summary</option>
+            </select>
+            <div className="text-[11px] text-ink-500 mt-1">
+              CSV attaches the full report; Text sends a short message (template, period, row count).
+            </div>
+          </div>
+          <div>
+            <label className="label">Telegram chat ID (override)</label>
+            <input className="input font-mono text-xs" value={form.telegram_chat_id}
+                   onChange={e => update('telegram_chat_id', e.target.value)}
+                   placeholder="leave blank to use default" />
+            <div className="text-[11px] text-ink-500 mt-1">
+              Channels start with <code>-100…</code>. Empty = use the global default.
+            </div>
           </div>
         </div>
       </div>

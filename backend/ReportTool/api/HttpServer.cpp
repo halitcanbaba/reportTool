@@ -105,6 +105,10 @@ namespace
 HttpServer::HttpServer(AppContext* ctx)
    : m_ctx(ctx), m_srv(std::make_unique<httplib::Server>())
 {
+   //--- httplib defaults to an 8 MB body cap. We accept large multipart uploads
+   //--- (≤ 50 MB Telegram sendDocument cap) on /api/reports/jobs/:id/send-telegram,
+   //--- so raise the limit to 60 MB for headroom.
+   m_srv->set_payload_max_length(60ull * 1024 * 1024);
    RegisterCors();
    RegisterAuthMiddleware();
    RegisterRoutes();

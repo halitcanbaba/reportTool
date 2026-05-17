@@ -147,6 +147,70 @@ TelegramClient::SendMessage(const std::string& bot_token,
                               "application/x-www-form-urlencoded; charset=utf-8", body));
 }
 
+namespace
+{
+   //--- Build a single-file multipart body. `file_field` is the API's expected
+   //--- form-field name (e.g. "document" or "photo").
+   std::string BuildMultipartBody(const std::string& chat_id,
+                                  const std::string& caption,
+                                  const std::string& file_field,
+                                  const std::string& display_name,
+                                  const std::string& mime,
+                                  const std::string& bytes,
+                                  const std::string& boundary)
+   {
+      std::string body;
+      body.reserve(bytes.size() + 4096);
+      auto field = [&](const std::string& name, const std::string& value){
+         body += "--" + boundary + "\r\n";
+         body += "Content-Disposition: form-data; name=\"" + name + "\"\r\n\r\n";
+         body += value + "\r\n";
+      };
+      field("chat_id", chat_id);
+      if(!caption.empty()) field("caption", caption);
+
+      body += "--" + boundary + "\r\n";
+      body += "Content-Disposition: form-data; name=\"" + file_field
+            + "\"; filename=\"" + display_name + "\"\r\n";
+      body += "Content-Type: " + mime + "\r\n\r\n";
+      body += bytes;
+      body += "\r\n";
+      body += "--" + boundary + "--\r\n";
+      return body;
+   }
+}
+
+TelegramClient::Result
+TelegramClient::SendDocumentBytes(const std::string& bot_token,
+                                   const std::string& chat_id,
+                                   const std::string& bytes,
+                                   const std::string& display_name,
+                                   const std::string& mime,
+                                   const std::string& caption)
+{
+   const std::string boundary = "----ReportToolFormBoundaryXp0VYAvCq2mD3";
+   const std::string body = BuildMultipartBody(chat_id, caption,
+      "document", display_name, mime, bytes, boundary);
+   return Interpret(PostHttps(bot_token, "sendDocument",
+                              "multipart/form-data; boundary=" + boundary, body));
+}
+
+TelegramClient::Result
+TelegramClient::SendPhotoBytes(const std::string& bot_token,
+                                const std::string& chat_id,
+                                const std::string& bytes,
+                                const std::string& display_name,
+                                const std::string& caption)
+{
+   //--- Telegram inspects the bytes for PNG/JPEG; the Content-Type we send is
+   //--- mostly informational. image/png is a safe default for our screenshots.
+   const std::string boundary = "----ReportToolFormBoundaryXp0VYAvCq2mD3";
+   const std::string body = BuildMultipartBody(chat_id, caption,
+      "photo", display_name, "image/png", bytes, boundary);
+   return Interpret(PostHttps(bot_token, "sendPhoto",
+                              "multipart/form-data; boundary=" + boundary, body));
+}
+
 TelegramClient::Result
 TelegramClient::SendDocument(const std::string& bot_token,
                               const std::string& chat_id,
@@ -154,33 +218,9 @@ TelegramClient::SendDocument(const std::string& bot_token,
                               const std::string& display_name,
                               const std::string& caption)
 {
-   //--- Read file
    std::ifstream f(file_path, std::ios::binary);
    if(!f) { Result r; r.error = "cannot open " + file_path; return r; }
    std::stringstream ss; ss << f.rdbuf();
-   const std::string file_bytes = ss.str();
-
-   //--- Build multipart body manually (Telegram accepts plain HTTP/1.1 multipart).
-   const std::string boundary = "----ReportToolFormBoundaryXp0VYAvCq2mD3";
-   std::string body;
-   body.reserve(file_bytes.size() + 4096);
-
-   auto field = [&](const std::string& name, const std::string& value){
-      body += "--" + boundary + "\r\n";
-      body += "Content-Disposition: form-data; name=\"" + name + "\"\r\n\r\n";
-      body += value + "\r\n";
-   };
-   field("chat_id", chat_id);
-   if(!caption.empty()) field("caption", caption);
-
-   //--- File part
-   body += "--" + boundary + "\r\n";
-   body += "Content-Disposition: form-data; name=\"document\"; filename=\"" + display_name + "\"\r\n";
-   body += "Content-Type: text/csv\r\n\r\n";
-   body += file_bytes;
-   body += "\r\n";
-   body += "--" + boundary + "--\r\n";
-
-   return Interpret(PostHttps(bot_token, "sendDocument",
-                              "multipart/form-data; boundary=" + boundary, body));
+   return SendDocumentBytes(bot_token, chat_id, ss.str(),
+                             display_name, "text/csv", caption);
 }
