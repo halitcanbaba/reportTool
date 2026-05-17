@@ -5,10 +5,14 @@ import type { AccountFilter } from '../types';
 import { fmtDateTime } from '../utils/format';
 import { collectPredicateFields } from '../lib/blueprintInsert';
 import { copyName } from '../lib/duplicate';
+import { useNavigate } from 'react-router-dom';
 import { FolderedCard, type FolderedCol } from '../components/FolderedCard';
-import { IconFilter } from '../components/icons';
+import { IconButton, IconFilter, IconEdit, IconDuplicate, IconDelete } from '../components/icons';
+import { FoldersAPI } from '../api/folders';
+import type { Folder } from '../types';
 
 export function AccountFilterListPage() {
+  const nav = useNavigate();
   const [items, setItems] = useState<AccountFilter[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -37,6 +41,24 @@ export function AccountFilterListPage() {
     } catch (e: any) {
       alert(e.message ?? 'duplicate failed');
     }
+  };
+
+  const duplicateFolder = async (folder: Folder, rows: AccountFilter[]) => {
+    const folders = await FoldersAPI.list('account_filter');
+    const dup = await FoldersAPI.create({
+      entity_type: 'account_filter',
+      name: copyName(folder.name, folders.map(f => f.name)),
+    });
+    const existing = items.map(i => i.name);
+    for (const r of rows) {
+      const full = await AccountFiltersAPI.get(r.id);
+      const { id: _id, created_at: _c, updated_at: _u, folder_id: _f, ...rest } = full as any;
+      void _id; void _c; void _u; void _f;
+      const created = await AccountFiltersAPI.create({ ...rest, name: copyName(r.name, existing) });
+      await FoldersAPI.move('account_filter', (created as any).id, dup.id);
+      existing.push((created as any).name ?? '');
+    }
+    reload();
   };
 
   const columns: FolderedCol<AccountFilter>[] = [
@@ -106,12 +128,13 @@ export function AccountFilterListPage() {
           rowKey={f => f.id}
           folderIdOf={f => f.folder_id ?? null}
           columns={columns}
+          onDuplicateFolder={duplicateFolder}
           rowActions={f => (
-            <>
-              <Link to={`/account-filters/${f.id}/edit`} className="btn-secondary text-xs px-2 py-1 mr-2">Edit</Link>
-              <button onClick={() => onDuplicate(f)} className="btn-secondary text-xs px-2 py-1 mr-2">Duplicate</button>
-              <button onClick={() => onDelete(f.id, f.name)} className="btn-secondary text-xs px-2 py-1 text-red-600 hover:bg-red-50">Delete</button>
-            </>
+            <span className="inline-flex items-center gap-0.5">
+              <IconButton title="Edit"      onClick={() => nav(`/account-filters/${f.id}/edit`)}><IconEdit /></IconButton>
+              <IconButton title="Duplicate" onClick={() => onDuplicate(f)}><IconDuplicate /></IconButton>
+              <IconButton title="Delete"    danger onClick={() => onDelete(f.id, f.name)}><IconDelete /></IconButton>
+            </span>
           )}
         />
       )}

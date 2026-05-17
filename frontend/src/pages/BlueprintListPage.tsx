@@ -5,8 +5,11 @@ import { astToText } from '../lib/exprChips';
 import { fmtDateTime } from '../utils/format';
 import { copyName } from '../lib/duplicate';
 import type { FormulaBlueprint } from '../types';
+import { useNavigate } from 'react-router-dom';
 import { FolderedCard, type FolderedCol } from '../components/FolderedCard';
-import { IconBlueprint } from '../components/icons';
+import { IconButton, IconBlueprint, IconEdit, IconDuplicate, IconDelete } from '../components/icons';
+import { FoldersAPI } from '../api/folders';
+import type { Folder } from '../types';
 
 function safePreview(b: FormulaBlueprint): string {
   try { return b.expr ? astToText(b.expr) : ''; }
@@ -14,6 +17,7 @@ function safePreview(b: FormulaBlueprint): string {
 }
 
 export function BlueprintListPage() {
+  const nav = useNavigate();
   const [items, setItems] = useState<FormulaBlueprint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -42,6 +46,24 @@ export function BlueprintListPage() {
     } catch (e: any) {
       alert(e.message ?? 'duplicate failed');
     }
+  };
+
+  const duplicateFolder = async (folder: Folder, rows: FormulaBlueprint[]) => {
+    const folders = await FoldersAPI.list('blueprint');
+    const dup = await FoldersAPI.create({
+      entity_type: 'blueprint',
+      name: copyName(folder.name, folders.map(f => f.name)),
+    });
+    const existing = items.map(i => i.name);
+    for (const r of rows) {
+      const full = await BlueprintsAPI.get(r.id);
+      const { id: _id, created_at: _c, updated_at: _u, folder_id: _f, ...rest } = full as any;
+      void _id; void _c; void _u; void _f;
+      const created = await BlueprintsAPI.create({ ...rest, name: copyName(r.name, existing) });
+      await FoldersAPI.move('blueprint', (created as any).id, dup.id);
+      existing.push((created as any).name ?? '');
+    }
+    reload();
   };
 
   const columns: FolderedCol<FormulaBlueprint>[] = [
@@ -109,12 +131,13 @@ export function BlueprintListPage() {
           rowKey={b => b.id}
           folderIdOf={b => b.folder_id ?? null}
           columns={columns}
+          onDuplicateFolder={duplicateFolder}
           rowActions={b => (
-            <>
-              <Link to={`/blueprints/${b.id}/edit`} className="btn-secondary text-xs px-2 py-1 mr-2">Edit</Link>
-              <button onClick={() => onDuplicate(b)} className="btn-secondary text-xs px-2 py-1 mr-2">Duplicate</button>
-              <button onClick={() => onDelete(b.id, b.name)} className="btn-secondary text-xs px-2 py-1 text-red-600 hover:bg-red-50">Delete</button>
-            </>
+            <span className="inline-flex items-center gap-0.5">
+              <IconButton title="Edit"      onClick={() => nav(`/blueprints/${b.id}/edit`)}><IconEdit /></IconButton>
+              <IconButton title="Duplicate" onClick={() => onDuplicate(b)}><IconDuplicate /></IconButton>
+              <IconButton title="Delete"    danger onClick={() => onDelete(b.id, b.name)}><IconDelete /></IconButton>
+            </span>
           )}
         />
       )}

@@ -10,7 +10,7 @@ import { DndContext, DragOverlay, useDraggable, useDroppable, PointerSensor, use
 import { FoldersAPI } from '../api/folders';
 import { useAuth } from '../contexts/AuthContext';
 import type { Folder, FolderEntityType } from '../types';
-import { IconFolder } from './icons';
+import { IconFolder, IconDuplicate } from './icons';
 
 export type FolderedCol<T> = {
   key: string;
@@ -34,6 +34,10 @@ type Props<T> = {
   rowClassName?: (row: T) => string;
   rowActions?: (row: T) => ReactNode;
   emptyText?: string;
+  //--- Optional: per-page "duplicate this entire folder" handler. When set,
+  //--- a copy button appears beside the folder's delete icon. The page knows
+  //--- how to clone each entity, so the orchestration lives there.
+  onDuplicateFolder?: (folder: Folder, rows: T[]) => Promise<void>;
 };
 
 const UNFILED = 'unfiled';
@@ -54,6 +58,7 @@ export function FolderedCard<T>(props: Props<T>) {
   const [newName, setNewName] = useState('');
   const [renameId, setRenameId] = useState<number | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  const [duplicatingId, setDuplicatingId] = useState<number | null>(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 3 } }));
   const [draggingLabel, setDraggingLabel] = useState<string | null>(null);
@@ -71,7 +76,20 @@ export function FolderedCard<T>(props: Props<T>) {
   }, [props.rows, props.rowKey, props.columns]);
 
   const reloadFolders = () =>
-    FoldersAPI.list(props.entityType).then(setFolders).catch(() => {});
+    FoldersAPI.list(props.entityType).then(fs => {
+      setFolders(fs);
+      //--- Folders default to collapsed on first sighting. We only set the
+      //--- map for folder ids we haven't seen yet, so a user-toggled state
+      //--- survives a folder list refresh (e.g. after create / rename / move).
+      setCollapsed(prev => {
+        const next = { ...prev };
+        let changed = false;
+        for (const f of fs) {
+          if (!(String(f.id) in next)) { next[String(f.id)] = true; changed = true; }
+        }
+        return changed ? next : prev;
+      });
+    }).catch(() => {});
 
   useEffect(() => { reloadFolders(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [props.entityType]);
 
@@ -277,6 +295,7 @@ export function FolderedCard<T>(props: Props<T>) {
               {/* Named folders — collapsible parents with indented children. */}
               {folderGroups.map(g => {
                 const folded = !!collapsed[String(g.id)];
+                const folderObj = folders.find(f => f.id === g.id);
                 return (
                   <FolderGroup<T>
                     key={String(g.id)}
@@ -293,6 +312,13 @@ export function FolderedCard<T>(props: Props<T>) {
                     onRenameCommit={() => renameFolder(g.id)}
                     onRenameCancel={() => setRenameId(null)}
                     onDelete={() => deleteFolder(g.id, g.name)}
+                    onDuplicate={props.onDuplicateFolder && folderObj ? async () => {
+                      setDuplicatingId(g.id);
+                      try { await props.onDuplicateFolder!(folderObj, g.raw); reloadFolders(); }
+                      catch (err: any) { alert(err?.message ?? 'duplicate failed'); }
+                      finally { setDuplicatingId(null); }
+                    } : undefined}
+                    duplicating={duplicatingId === g.id}
                     colCount={colCount}
                     rows={g.rows}
                     columns={props.columns}
@@ -384,6 +410,7 @@ function HeaderCell<T>({ col, search, onSearchChange, sortKey, sortDir, onCycleS
 function FolderGroup<T>({
   folderId, name, count, folded, onToggle,
   isAdmin, renaming, renameValue, onStartRename, onRenameChange, onRenameCommit, onRenameCancel, onDelete,
+  onDuplicate, duplicating,
   colCount, rows, columns, rowKey, rowActions, rowClassName, draggable,
 }: {
   folderId: number;
@@ -399,6 +426,8 @@ function FolderGroup<T>({
   onRenameCommit: () => void;
   onRenameCancel: () => void;
   onDelete: () => void;
+  onDuplicate?: () => void;
+  duplicating?: boolean;
   colCount: number;
   rows: T[];
   columns: FolderedCol<T>[];
@@ -447,11 +476,24 @@ function FolderGroup<T>({
               </span>
             )}
             <span className="text-xs text-ink-500 ml-1">({count})</span>
-            {canEdit && (
-              <button type="button"
-                      className="ml-auto text-ink-400 hover:text-red-600 opacity-0 group-hover:opacity-100 px-2 text-sm"
-                      title="Delete folder"
-                      onClick={onDelete}>×</button>
+            {duplicating && (
+              <span className="ml-auto text-[11px] text-ink-500 italic">duplicating…</span>
+            )}
+            {canEdit && !duplicating && (
+              <span className="ml-auto inline-flex items-center gap-0.5 opacity-0 group-hover:opacity-100">
+                {onDuplicate && (
+                  <button type="button"
+                          className="p-1 text-ink-500 hover:text-ink-900 hover:bg-ink-200 rounded"
+                          title="Duplicate folder + all items"
+                          onClick={onDuplicate}>
+                    <IconDuplicate />
+                  </button>
+                )}
+                <button type="button"
+                        className="p-1 text-ink-400 hover:text-red-600 hover:bg-red-50 rounded text-sm leading-none"
+                        title="Delete folder"
+                        onClick={onDelete}>×</button>
+              </span>
             )}
           </div>
         </td>

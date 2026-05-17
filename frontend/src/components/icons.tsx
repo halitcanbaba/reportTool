@@ -81,3 +81,85 @@ export function IconFilter(p: IconProps) {
     </svg>
   );
 }
+
+//--- Action icons used in row action columns ----------------------
+
+//--- Play triangle — Run.
+export function IconPlay(p: IconProps) {
+  return (
+    <svg {...base(p)} fill="currentColor" stroke="none">
+      <path d="M7 4.5v15l13-7.5z" />
+    </svg>
+  );
+}
+
+//--- Triangle + gear — Run with overrides.
+export function IconRunWith(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M5 4.5v15l11-7.5z" fill="currentColor" stroke="none" />
+      <circle cx="19" cy="19" r="3" />
+      <path d="M19 16.5v-1M19 22.5v-1M16.5 19h-1M22.5 19h-1" />
+    </svg>
+  );
+}
+
+//--- Pencil — Edit.
+export function IconEdit(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M4 20h4l11-11-4-4L4 16z" />
+      <path d="M14 5l4 4" />
+    </svg>
+  );
+}
+
+//--- Two overlapping rectangles — Duplicate / Copy.
+export function IconDuplicate(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <rect x="8"  y="8"  width="12" height="12" rx="1.5" />
+      <path d="M4 16V5a1 1 0 0 1 1-1h11" />
+    </svg>
+  );
+}
+
+//--- Same shape, exposed under the "copy" name for folder-copy callers.
+export const IconCopy = IconDuplicate;
+
+//--- Trash can — Delete.
+export function IconDelete(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M4 7h16" />
+      <path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+      <path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12" />
+      <path d="M10 11v6M14 11v6" />
+    </svg>
+  );
+}
+
+//+------------------------------------------------------------------+
+//| Small square icon button used in list-page row actions.          |
+//| Tooltip via native `title` attribute on hover.                   |
+//+------------------------------------------------------------------+
+import type { ButtonHTMLAttributes, ReactNode } from 'react';
+
+export function IconButton({ title, danger = false, className = '', children, ...rest }: {
+  title: string;
+  danger?: boolean;
+  className?: string;
+  children: ReactNode;
+} & Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'title' | 'children'>) {
+  const base =
+    'inline-flex items-center justify-center w-7 h-7 rounded transition-colors ' +
+    'text-ink-600 hover:bg-ink-100 disabled:opacity-40 disabled:cursor-not-allowed ';
+  const tone = danger ? 'hover:text-red-600 hover:bg-red-50 ' : 'hover:text-ink-900 ';
+  return (
+    <button type="button" title={title} aria-label={title}
+            className={base + tone + className}
+            {...rest}>
+      {children}
+    </button>
+  );
+}

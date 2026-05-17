@@ -246,6 +246,8 @@ export type ScheduleEntry = {
   day_of_week: number;
   day_of_month: number;
   every_n_hours: number;
+  hours: number[];           // 0..23, empty = legacy every_n_hours (hourly only)
+  days_of_week: number[];    // 0..6 (0=Sun), empty = every day
   telegram_chat_id: string;
   delivery_format: ScheduleDeliveryFormat;
   enabled: boolean;

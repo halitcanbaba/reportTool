@@ -3,7 +3,7 @@
 
 namespace
 {
-   constexpr int kCurrentSchemaVersion = 9;
+   constexpr int kCurrentSchemaVersion = 10;
 
    //--- Tables that survive every version (managers, regex_filters,
    //--- daily_cache, deal_cache). These are idempotent.
@@ -337,6 +337,19 @@ namespace
       if(!AddFolderIdColumns(db, err)) return false;
       return WriteVersion(db, 9, err);
    }
+
+   //--- v9 → v10: richer recurrence. `hours_json` holds an int[] of hours
+   //--- (0..23) for the hourly mode; empty means "use every_n_hours legacy".
+   //--- `days_of_week_json` holds an int[] of weekdays (0=Sun..6=Sat) used by
+   //--- both daily and hourly modes; empty means "every day".
+   bool MigrateToV10(SqliteDb& db, std::string* err)
+   {
+      if(!db.Exec("ALTER TABLE schedules ADD COLUMN hours_json TEXT NOT NULL DEFAULT '[]'", err))
+         return false;
+      if(!db.Exec("ALTER TABLE schedules ADD COLUMN days_of_week_json TEXT NOT NULL DEFAULT '[]'", err))
+         return false;
+      return WriteVersion(db, 10, err);
+   }
 }
 
 bool Schema::Apply(SqliteDb& db, std::string* err)
@@ -362,6 +375,9 @@ bool Schema::Apply(SqliteDb& db, std::string* err)
       //--- v9: folders table + folder_id columns on the five entity tables.
       if(!db.Exec(kV9CreateFolders, err)) return false;
       if(!AddFolderIdColumns(db, err)) return false;
+      //--- v10: richer recurrence on schedules.
+      if(!db.Exec("ALTER TABLE schedules ADD COLUMN hours_json TEXT NOT NULL DEFAULT '[]'", err)) return false;
+      if(!db.Exec("ALTER TABLE schedules ADD COLUMN days_of_week_json TEXT NOT NULL DEFAULT '[]'", err)) return false;
       return WriteVersion(db, kCurrentSchemaVersion, err);
    }
    if(v < 2)
@@ -395,6 +411,10 @@ bool Schema::Apply(SqliteDb& db, std::string* err)
    if(v < 9)
    {
       if(!MigrateToV9(db, err)) return false;
+   }
+   if(v < 10)
+   {
+      if(!MigrateToV10(db, err)) return false;
    }
    //--- v >= current: no-op.
    return true;

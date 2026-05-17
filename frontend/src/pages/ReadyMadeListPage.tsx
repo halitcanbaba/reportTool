@@ -11,7 +11,9 @@ import { fmtDateTime, todayLocal } from '../utils/format';
 import { copyName } from '../lib/duplicate';
 import type { ReadyMadeReport, Template, AccountFilter, Manager, ReadyMadeRunRequest } from '../types';
 import { FolderedCard, type FolderedCol } from '../components/FolderedCard';
-import { IconReadyMade } from '../components/icons';
+import { IconButton, IconReadyMade, IconPlay, IconRunWith, IconEdit, IconDuplicate, IconDelete } from '../components/icons';
+import { FoldersAPI } from '../api/folders';
+import type { Folder } from '../types';
 
 function describeStrategy(rm: ReadyMadeReport): string {
   if (rm.date_strategy === 'fixed') {
@@ -82,6 +84,35 @@ export function ReadyMadeListPage() {
     }
   };
 
+  const duplicateFolder = async (folder: Folder, rows: ReadyMadeReport[]) => {
+    const folders = await FoldersAPI.list('ready_made');
+    const dup = await FoldersAPI.create({
+      entity_type: 'ready_made',
+      name: copyName(folder.name, folders.map(f => f.name)),
+    });
+    const existing = items.map(i => i.name);
+    for (const r of rows) {
+      const full = await ReadyMadeAPI.get(r.id);
+      const { id: _id, created_at: _c, updated_at: _u, folder_id: _f, ...rest } = full as any;
+      void _id; void _c; void _u; void _f;
+      const created = await ReadyMadeAPI.create({ ...rest, name: copyName(r.name, existing) });
+      await FoldersAPI.move('ready_made', (created as any).id, dup.id);
+      existing.push((created as any).name ?? '');
+    }
+    reload();
+  };
+
+  //--- Persist a quick-edit change to a Ready-Made row. Sends the full
+  //--- payload (templates/account-filter/dates etc.) because the backend's
+  //--- PUT isn't partial; we splice the patch into the latest `get` payload.
+  const patchReadyMade = async (rm: ReadyMadeReport, patch: Partial<ReadyMadeReport>) => {
+    const full = await ReadyMadeAPI.get(rm.id);
+    const { id: _id, created_at: _c, updated_at: _u, ...rest } = full as any;
+    void _id; void _c; void _u;
+    await ReadyMadeAPI.update(rm.id, { ...rest, ...patch });
+    reload();
+  };
+
   const columns: FolderedCol<ReadyMadeReport>[] = [
     {
       key: 'name', header: 'Name', searchable: true,
@@ -99,18 +130,43 @@ export function ReadyMadeListPage() {
     {
       key: 'template', header: 'Template', searchable: true,
       searchValue: rm => templates.get(rm.template_id)?.name ?? '',
-      render: rm => {
-        const tpl = templates.get(rm.template_id);
-        return <span className="text-xs">{tpl?.name ?? <span className="text-red-600">missing #{rm.template_id}</span>}</span>;
-      },
+      render: rm => (
+        <select className="text-xs border border-ink-200 bg-white rounded px-1 py-0.5 max-w-[180px]"
+                value={rm.template_id}
+                title="Change template"
+                onPointerDown={e => e.stopPropagation()}
+                onClick={e => e.stopPropagation()}
+                onChange={async e => {
+                  const next = Number(e.target.value);
+                  if (next === rm.template_id) return;
+                  try { await patchReadyMade(rm, { template_id: next }); }
+                  catch (err: any) { alert(err?.message ?? 'save failed'); }
+                }}>
+          {!templates.has(rm.template_id) && <option value={rm.template_id}>missing #{rm.template_id}</option>}
+          {Array.from(templates.values()).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+      ),
     },
     {
       key: 'account_filter', header: 'Account filter', searchable: true,
       searchValue: rm => (rm.account_filter_id ? filters.get(rm.account_filter_id)?.name ?? '' : ''),
-      render: rm => {
-        const af = rm.account_filter_id ? filters.get(rm.account_filter_id) : null;
-        return <span className="text-xs">{af ? af.name : <span className="text-ink-400">— manager defaults —</span>}</span>;
-      },
+      render: rm => (
+        <select className="text-xs border border-ink-200 bg-white rounded px-1 py-0.5 max-w-[180px]"
+                value={rm.account_filter_id ?? ''}
+                title="Change account filter"
+                onPointerDown={e => e.stopPropagation()}
+                onClick={e => e.stopPropagation()}
+                onChange={async e => {
+                  const raw = e.target.value;
+                  const next = raw === '' ? null : Number(raw);
+                  if (next === (rm.account_filter_id ?? null)) return;
+                  try { await patchReadyMade(rm, { account_filter_id: next as any }); }
+                  catch (err: any) { alert(err?.message ?? 'save failed'); }
+                }}>
+          <option value="">— manager defaults —</option>
+          {Array.from(filters.values()).map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+        </select>
+      ),
     },
     {
       key: 'date_strategy', header: 'Date strategy',
@@ -151,14 +207,15 @@ export function ReadyMadeListPage() {
           rowKey={rm => rm.id}
           folderIdOf={rm => rm.folder_id ?? null}
           columns={columns}
+          onDuplicateFolder={duplicateFolder}
           rowActions={rm => (
-            <>
-              <button onClick={() => onRun(rm.id)} className="btn-primary text-xs px-2 py-1 mr-2">▶ Run</button>
-              <button onClick={() => setRunWith(rm)} className="btn-secondary text-xs px-2 py-1 mr-2">Run with…</button>
-              <Link to={`/ready-made/${rm.id}/edit`} className="btn-secondary text-xs px-2 py-1 mr-2">Edit</Link>
-              <button onClick={() => onDuplicate(rm)} className="btn-secondary text-xs px-2 py-1 mr-2">Duplicate</button>
-              <button onClick={() => onDelete(rm.id, rm.name)} className="btn-secondary text-xs px-2 py-1 text-red-600 hover:bg-red-50">Delete</button>
-            </>
+            <span className="inline-flex items-center gap-0.5">
+              <IconButton title="Run"        onClick={() => onRun(rm.id)}><IconPlay /></IconButton>
+              <IconButton title="Run with…"  onClick={() => setRunWith(rm)}><IconRunWith /></IconButton>
+              <IconButton title="Edit"       onClick={() => nav(`/ready-made/${rm.id}/edit`)}><IconEdit /></IconButton>
+              <IconButton title="Duplicate"  onClick={() => onDuplicate(rm)}><IconDuplicate /></IconButton>
+              <IconButton title="Delete"     danger onClick={() => onDelete(rm.id, rm.name)}><IconDelete /></IconButton>
+            </span>
           )}
         />
       )}

@@ -7,6 +7,8 @@
 #include "../third_party/httplib.h"
 #include "../db/Repos.h"
 #include "../core/Scheduler.h"
+#include <algorithm>
+#include <set>
 
 using nlohmann::json;
 
@@ -34,6 +36,8 @@ namespace
          { "delivery_format",   s.delivery_format.empty() ? std::string("csv") : s.delivery_format },
          { "enabled",           s.enabled },
          { "folder_id",         s.folder_id ? json(s.folder_id) : json(nullptr) },
+         { "hours",             s.hours },
+         { "days_of_week",      s.days_of_week },
          { "next_run_at",       s.next_run_at },
          { "last_run_at",       s.last_run_at },
          { "last_status",       s.last_status },
@@ -66,6 +70,23 @@ namespace
          s->enabled          = j.value("enabled",          true);
          s->folder_id = (j.contains("folder_id") && j["folder_id"].is_number_integer())
             ? j["folder_id"].get<int64_t>() : 0;
+         //--- Helper: parse, clamp, dedupe an int array from JSON.
+         auto readIntList = [&](const char* key, int lo, int hi) -> std::vector<int> {
+            std::vector<int> out;
+            if(!j.contains(key) || !j[key].is_array()) return out;
+            std::set<int> seen;
+            for(const auto& v : j[key])
+            {
+               if(!v.is_number_integer()) continue;
+               int x = v.get<int>();
+               if(x < lo || x > hi) continue;
+               if(seen.insert(x).second) out.push_back(x);
+            }
+            std::sort(out.begin(), out.end());
+            return out;
+         };
+         s->hours        = readIntList("hours",        0, 23);
+         s->days_of_week = readIntList("days_of_week", 0,  6);
       }
       catch(const std::exception& e) { *err = e.what(); return false; }
       return true;

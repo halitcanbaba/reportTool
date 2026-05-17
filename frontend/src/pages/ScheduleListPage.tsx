@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { SchedulesAPI } from '../api/schedules';
 import { ReadyMadeAPI } from '../api/readyMade';
 import { TelegramSettingsCard } from '../components/TelegramSettingsCard';
@@ -7,15 +7,42 @@ import { fmtDateTime } from '../utils/format';
 import { copyName } from '../lib/duplicate';
 import type { ScheduleEntry, ReadyMadeReport } from '../types';
 import { FolderedCard, type FolderedCol } from '../components/FolderedCard';
-import { IconSchedule } from '../components/icons';
+import { IconButton, IconSchedule, IconPlay, IconEdit, IconDuplicate, IconDelete } from '../components/icons';
+import { FoldersAPI } from '../api/folders';
+import type { Folder } from '../types';
+
+const DOW_ABBR = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+//--- Compress a sorted day-of-week list into a friendly label.
+//--- 0=Sun..6=Sat. [1,2,3,4,5] → "weekdays"; [0,6] → "weekends".
+function describeDows(dows: number[]): string {
+  if (!dows.length) return '';
+  const set = new Set(dows);
+  const weekdays = [1,2,3,4,5].every(d => set.has(d)) && !set.has(0) && !set.has(6);
+  const weekends = set.has(0) && set.has(6) && set.size === 2;
+  if (set.size === 7) return 'every day';
+  if (weekdays) return 'weekdays';
+  if (weekends) return 'weekends';
+  return dows.map(d => DOW_ABBR[d]).join(', ');
+}
 
 function describeFreq(s: ScheduleEntry): string {
-  const t = `${String(s.time_hour).padStart(2, '0')}:${String(s.time_minute).padStart(2, '0')} UTC`;
+  const mm = String(s.time_minute).padStart(2, '0');
+  const t = `${String(s.time_hour).padStart(2, '0')}:${mm} UTC`;
+  const dowSuffix = (s.days_of_week && s.days_of_week.length)
+    ? ` · ${describeDows(s.days_of_week)}`
+    : '';
   switch (s.frequency) {
-    case 'daily':   return `Daily at ${t}`;
-    case 'weekly':  return `Weekly on ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][s.day_of_week] ?? '?'} at ${t}`;
+    case 'daily':   return `Daily at ${t}${dowSuffix}`;
+    case 'weekly':  return `Weekly on ${DOW_ABBR[s.day_of_week] ?? '?'} at ${t}`;
     case 'monthly': return `Monthly on day ${s.day_of_month} at ${t}`;
-    case 'hourly':  return `Every ${s.every_n_hours} hour(s)`;
+    case 'hourly': {
+      const hours = s.hours && s.hours.length
+        ? s.hours.map(h => `${String(h).padStart(2,'0')}:${mm}`).join(', ')
+        : null;
+      const head = hours ? `Hourly at ${hours}` : `Every ${s.every_n_hours} hour(s)`;
+      return `${head}${dowSuffix}`;
+    }
     default:        return s.frequency;
   }
 }
@@ -33,6 +60,7 @@ function statusBadge(s: string) {
 }
 
 export function ScheduleListPage() {
+  const nav = useNavigate();
   const [items, setItems] = useState<ScheduleEntry[]>([]);
   const [readyMades, setReadyMades] = useState<Map<number, ReadyMadeReport>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -84,6 +112,29 @@ export function ScheduleListPage() {
     }
   };
 
+  const duplicateFolder = async (folder: Folder, rows: ScheduleEntry[]) => {
+    const folders = await FoldersAPI.list('schedule');
+    const dup = await FoldersAPI.create({
+      entity_type: 'schedule',
+      name: copyName(folder.name, folders.map(f => f.name)),
+    });
+    const existing = items.map(i => i.name);
+    for (const r of rows) {
+      const full = await SchedulesAPI.get(r.id);
+      const { id: _id, next_run_at: _n, last_run_at: _l, last_status: _ls, last_job_id: _lj, last_error: _le,
+              created_at: _c, updated_at: _u, folder_id: _f, ...rest } = full as any;
+      void _id; void _n; void _l; void _ls; void _lj; void _le; void _c; void _u; void _f;
+      const created = await SchedulesAPI.create({
+        ...rest,
+        name:    copyName(r.name, existing),
+        enabled: false,
+      });
+      await FoldersAPI.move('schedule', (created as any).id, dup.id);
+      existing.push(((created as any).name ?? ''));
+    }
+    reload();
+  };
+
   const columns: FolderedCol<ScheduleEntry>[] = [
     {
       key: 'name', header: 'Name', searchable: true,
@@ -91,16 +142,33 @@ export function ScheduleListPage() {
       render: s => (
         <div className="flex items-start gap-2">
           <IconSchedule className="text-ink-500 shrink-0 mt-0.5" />
-          <div>
+          <div className="min-w-0">
             <div className="font-medium flex items-center gap-2">
               <input type="checkbox" checked={s.enabled} onChange={() => onToggle(s)} title="enabled"
                      onPointerDown={e => e.stopPropagation()}
                      onClick={e => e.stopPropagation()} />
               {s.name}
             </div>
-            {s.telegram_chat_id && <div className="text-[11px] text-ink-500 font-mono mt-0.5">→ {s.telegram_chat_id}</div>}
+            <InlineChatId value={s.telegram_chat_id} onSave={async (v) => {
+              await SchedulesAPI.update(s.id, { telegram_chat_id: v });
+              reload();
+            }} />
           </div>
         </div>
+      ),
+    },
+    {
+      key: 'delivery', header: 'Send as',
+      searchValue: s => s.delivery_format,
+      sortValue: s => s.delivery_format,
+      render: s => (
+        <InlineSelect<'csv' | 'text'>
+          value={s.delivery_format}
+          options={[{ value: 'csv', label: 'CSV file' }, { value: 'text', label: 'Text summary' }]}
+          onSave={async (v) => {
+            await SchedulesAPI.update(s.id, { delivery_format: v });
+            reload();
+          }} />
       ),
     },
     {
@@ -164,13 +232,14 @@ export function ScheduleListPage() {
           folderIdOf={s => s.folder_id ?? null}
           rowClassName={s => (s.enabled ? '' : 'opacity-60')}
           columns={columns}
+          onDuplicateFolder={duplicateFolder}
           rowActions={s => (
-            <>
-              <button onClick={() => onRunNow(s)} className="btn-secondary text-xs px-2 py-1 mr-1">Run now</button>
-              <Link to={`/schedules/${s.id}/edit`} className="btn-secondary text-xs px-2 py-1 mr-1">Edit</Link>
-              <button onClick={() => onDuplicate(s)} className="btn-secondary text-xs px-2 py-1 mr-1">Duplicate</button>
-              <button onClick={() => onDelete(s.id, s.name)} className="btn-secondary text-xs px-2 py-1 text-red-600 hover:bg-red-50">Delete</button>
-            </>
+            <span className="inline-flex items-center gap-0.5">
+              <IconButton title="Run now"   onClick={() => onRunNow(s)}><IconPlay /></IconButton>
+              <IconButton title="Edit"      onClick={() => nav(`/schedules/${s.id}/edit`)}><IconEdit /></IconButton>
+              <IconButton title="Duplicate" onClick={() => onDuplicate(s)}><IconDuplicate /></IconButton>
+              <IconButton title="Delete"    danger onClick={() => onDelete(s.id, s.name)}><IconDelete /></IconButton>
+            </span>
           )}
         />
       )}
@@ -190,5 +259,66 @@ export function ScheduleListPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+//--- Inline editor for the Schedule's optional Telegram chat-id override. Idle
+//--- state shows `→ <chat>` (or "+ chat id" placeholder when empty); click to
+//--- edit, blur/Enter to save, Escape to cancel.
+function InlineChatId({ value, onSave }: { value: string; onSave: (v: string) => Promise<void> }) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(value);
+  const commit = async () => {
+    setEditing(false);
+    if (text.trim() === value) return;
+    try { await onSave(text.trim()); }
+    catch (e: any) { alert(e?.message ?? 'save failed'); setText(value); }
+  };
+  if (!editing) {
+    return (
+      <div className="text-[11px] text-ink-500 font-mono mt-0.5 cursor-text hover:bg-ink-50 rounded px-1 -mx-1 inline-block"
+           title="Click to set Telegram chat ID"
+           onPointerDown={e => e.stopPropagation()}
+           onClick={() => { setText(value); setEditing(true); }}>
+        {value ? `→ ${value}` : <span className="italic text-ink-400">+ chat id</span>}
+      </div>
+    );
+  }
+  return (
+    <input className="mt-0.5 text-[11px] font-mono border border-ink-300 rounded px-1 py-0.5"
+           style={{ width: 200 }}
+           autoFocus
+           placeholder="-100… or leave empty for default"
+           value={text}
+           onPointerDown={e => e.stopPropagation()}
+           onChange={e => setText(e.target.value)}
+           onBlur={commit}
+           onKeyDown={e => {
+             if (e.key === 'Enter')  (e.target as HTMLInputElement).blur();
+             if (e.key === 'Escape') { setEditing(false); setText(value); }
+           }} />
+  );
+}
+
+//--- Inline <select> for a closed set of options. Always rendered as a real
+//--- <select> so the dropdown is one click away, no edit-mode toggle needed.
+function InlineSelect<V extends string>({ value, options, onSave }: {
+  value: V;
+  options: { value: V; label: string }[];
+  onSave: (v: V) => Promise<void>;
+}) {
+  return (
+    <select className="text-xs border border-ink-200 bg-white rounded px-1 py-0.5"
+            value={value}
+            onPointerDown={e => e.stopPropagation()}
+            onClick={e => e.stopPropagation()}
+            onChange={async e => {
+              const next = e.target.value as V;
+              if (next === value) return;
+              try { await onSave(next); }
+              catch (err: any) { alert(err?.message ?? 'save failed'); }
+            }}>
+      {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+    </select>
   );
 }

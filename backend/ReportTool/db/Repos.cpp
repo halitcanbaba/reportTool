@@ -930,12 +930,32 @@ namespace
       s.delivery_format  = st.ColText(18);
       if(s.delivery_format.empty()) s.delivery_format = "csv";
       s.folder_id        = st.IsNull(19) ? 0 : st.ColI64(19);
+      //--- v10 JSON arrays (hours-of-day, days-of-week).
+      auto readIntArray = [&](int col, std::vector<int>& out){
+         out.clear();
+         const std::string raw = st.ColText(col);
+         if(raw.empty()) return;
+         auto j = nlohmann::json::parse(raw, nullptr, false);
+         if(j.is_discarded() || !j.is_array()) return;
+         for(const auto& v : j) if(v.is_number_integer()) out.push_back(v.get<int>());
+      };
+      readIntArray(20, s.hours);
+      readIntArray(21, s.days_of_week);
    }
 
    const char* kScheduleSelectCols =
       "id,name,ready_made_id,frequency,time_hour,time_minute,day_of_week,day_of_month,"
       "every_n_hours,telegram_chat_id,enabled,next_run_at,last_run_at,last_status,"
-      "last_job_id,last_error,created_at,updated_at,delivery_format,folder_id";
+      "last_job_id,last_error,created_at,updated_at,delivery_format,folder_id,"
+      "hours_json,days_of_week_json";
+
+   //--- Serialize int-array → JSON string for binding.
+   std::string IntArrayToJson(const std::vector<int>& v)
+   {
+      nlohmann::json j = nlohmann::json::array();
+      for(int x : v) j.push_back(x);
+      return j.dump();
+   }
 }
 
 std::vector<ScheduleEntry> ScheduleRepo::ListAll(SqliteDb& db)
@@ -968,8 +988,9 @@ int64_t ScheduleRepo::Insert(SqliteDb& db, ScheduleEntry& s)
    SqliteStmt st(db,
       "INSERT INTO schedules(name,ready_made_id,frequency,time_hour,time_minute,"
       "day_of_week,day_of_month,every_n_hours,telegram_chat_id,enabled,next_run_at,"
-      "last_run_at,last_status,last_error,created_at,updated_at,delivery_format,folder_id) "
-      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+      "last_run_at,last_status,last_error,created_at,updated_at,delivery_format,folder_id,"
+      "hours_json,days_of_week_json) "
+      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
    st.BindText(1,  s.name);
    st.BindI64 (2,  s.ready_made_id);
    st.BindText(3,  s.frequency.empty() ? "daily" : s.frequency);
@@ -988,6 +1009,8 @@ int64_t ScheduleRepo::Insert(SqliteDb& db, ScheduleEntry& s)
    st.BindI64 (16, now);
    st.BindText(17, s.delivery_format.empty() ? "csv" : s.delivery_format);
    if(s.folder_id) st.BindI64(18, s.folder_id); else st.BindNull(18);
+   st.BindText(19, IntArrayToJson(s.hours));
+   st.BindText(20, IntArrayToJson(s.days_of_week));
    st.Step();
    s.id = db.LastInsertRowid();
    s.created_at = s.updated_at = now;
@@ -1001,7 +1024,8 @@ bool ScheduleRepo::Update(SqliteDb& db, ScheduleEntry& s)
    SqliteStmt st(db,
       "UPDATE schedules SET name=?,ready_made_id=?,frequency=?,time_hour=?,time_minute=?,"
       "day_of_week=?,day_of_month=?,every_n_hours=?,telegram_chat_id=?,enabled=?,"
-      "next_run_at=?,updated_at=?,delivery_format=?,folder_id=? WHERE id=?");
+      "next_run_at=?,updated_at=?,delivery_format=?,folder_id=?,hours_json=?,days_of_week_json=? "
+      "WHERE id=?");
    st.BindText(1,  s.name);
    st.BindI64 (2,  s.ready_made_id);
    st.BindText(3,  s.frequency.empty() ? "daily" : s.frequency);
@@ -1016,7 +1040,9 @@ bool ScheduleRepo::Update(SqliteDb& db, ScheduleEntry& s)
    st.BindI64 (12, now);
    st.BindText(13, s.delivery_format.empty() ? "csv" : s.delivery_format);
    if(s.folder_id) st.BindI64(14, s.folder_id); else st.BindNull(14);
-   st.BindI64 (15, s.id);
+   st.BindText(15, IntArrayToJson(s.hours));
+   st.BindText(16, IntArrayToJson(s.days_of_week));
+   st.BindI64 (17, s.id);
    st.Step();
    s.updated_at = now;
    return true;

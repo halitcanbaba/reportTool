@@ -198,25 +198,53 @@ int64_t Scheduler::ComputeNext(const ScheduleEntry& s, int64_t now)
    //--- All wall-clock math in broker UTC (the connected MT5 broker uses UTC
    //--- trading-day boundaries — kTzOffsetSec is 0). next_run_at is stored UTC.
    int y, mo, d; ToYmdLocal(now, &y, &mo, &d);
+
+   //--- True when the given UTC instant's local day-of-week is allowed by the
+   //--- schedule's `days_of_week` filter. Empty filter = every day.
+   auto dowAllowed = [&](int64_t ts) {
+      if(s.days_of_week.empty()) return true;
+      const int dow = DowLocal(ts);
+      for(int x : s.days_of_week) if(x == dow) return true;
+      return false;
+   };
+
    if(s.frequency == "hourly")
    {
-      const int n = std::max(1, s.every_n_hours);
-      const int64_t step = (int64_t)n * 3600;
-      //--- Snap to (s.time_minute) past the next n-hour boundary, where
-      //--- boundaries align to GMT+3 midnight.
-      int64_t base = MakeUtcFromLocal(y, mo, d, 0, s.time_minute);
-      while(base <= now) base += step;
-      return base;
+      //--- Pick the hour set: either the user-specified subset, or the legacy
+      //--- every-N-hours sweep (when `hours` is empty).
+      std::vector<int> hour_set = s.hours;
+      if(hour_set.empty())
+      {
+         const int n = std::max(1, s.every_n_hours);
+         for(int h = 0; h < 24; h += n) hour_set.push_back(h);
+      }
+      //--- Walk forward day-by-day; for each allowed weekday try every hour in
+      //--- sorted order. Cap at 14 days so a degenerate config can't loop.
+      for(int day_offset = 0; day_offset < 14; ++day_offset)
+      {
+         int yy, mm, dd; AddDaysLocal(now, day_offset, &yy, &mm, &dd);
+         const int64_t day_anchor = MakeUtcFromLocal(yy, mm, dd, 0, 0);
+         if(!dowAllowed(day_anchor)) continue;
+         for(int h : hour_set)
+         {
+            const int64_t cand = MakeUtcFromLocal(yy, mm, dd, h, s.time_minute);
+            if(cand > now) return cand;
+         }
+      }
+      //--- Defensive fallback: nothing fit in 14 days (shouldn't happen).
+      return now + 3600;
    }
    if(s.frequency == "daily")
    {
-      int64_t cand = MakeUtcFromLocal(y, mo, d, s.time_hour, s.time_minute);
-      if(cand <= now)
+      //--- Walk forward up to 30 days searching for an allowed weekday.
+      for(int day_offset = 0; day_offset < 30; ++day_offset)
       {
-         int y2,mo2,d2; AddDaysLocal(now, 1, &y2, &mo2, &d2);
-         cand = MakeUtcFromLocal(y2, mo2, d2, s.time_hour, s.time_minute);
+         int yy, mm, dd; AddDaysLocal(now, day_offset, &yy, &mm, &dd);
+         const int64_t cand = MakeUtcFromLocal(yy, mm, dd, s.time_hour, s.time_minute);
+         if(!dowAllowed(cand)) continue;
+         if(cand > now) return cand;
       }
-      return cand;
+      return now + 86400;
    }
    if(s.frequency == "weekly")
    {

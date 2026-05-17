@@ -14,12 +14,15 @@ const empty: ScheduleEntryInput = {
   day_of_week: 1,
   day_of_month: 1,
   every_n_hours: 1,
+  hours: [],
+  days_of_week: [],
   telegram_chat_id: '',
   delivery_format: 'csv',
   enabled: true,
 };
 
 const DOW = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+const DOW_SHORT = ['S','M','T','W','T','F','S'];
 
 export function ScheduleEditPage() {
   const { id } = useParams();
@@ -47,6 +50,8 @@ export function ScheduleEditPage() {
         day_of_week: s.day_of_week,
         day_of_month: s.day_of_month,
         every_n_hours: s.every_n_hours,
+        hours: s.hours ?? [],
+        days_of_week: s.days_of_week ?? [],
         telegram_chat_id: s.telegram_chat_id,
         delivery_format: s.delivery_format ?? 'csv',
         enabled: s.enabled,
@@ -71,6 +76,18 @@ export function ScheduleEditPage() {
   };
 
   const showTime = form.frequency !== 'hourly';
+
+  const toggleHour = (h: number) => {
+    const set = new Set(form.hours);
+    if (set.has(h)) set.delete(h); else set.add(h);
+    update('hours', Array.from(set).sort((a, b) => a - b));
+  };
+  const toggleDow = (d: number) => {
+    const set = new Set(form.days_of_week);
+    if (set.has(d)) set.delete(d); else set.add(d);
+    update('days_of_week', Array.from(set).sort((a, b) => a - b));
+  };
+  const usingSpecificHours = form.hours.length > 0;
 
   return (
     <div className="space-y-6">
@@ -147,11 +164,40 @@ export function ScheduleEditPage() {
         )}
 
         {form.frequency === 'hourly' && (
-          <div>
-            <label className="label">Every N hours</label>
-            <input className="input" type="number" min={1} max={24}
-                   value={form.every_n_hours}
-                   onChange={e => update('every_n_hours', Math.min(24, Math.max(1, Number(e.target.value || 1))))} />
+          <div className="space-y-3">
+            <div>
+              <label className="label">Hours of day</label>
+              <div className="grid grid-cols-12 gap-1.5">
+                {Array.from({ length: 24 }, (_, h) => {
+                  const on = form.hours.includes(h);
+                  return (
+                    <button key={h} type="button" onClick={() => toggleHour(h)}
+                            className={`h-8 rounded-md text-xs font-mono border transition-colors ${
+                              on
+                                ? 'bg-amber-100 border-amber-400 text-amber-900'
+                                : 'bg-white border-ink-200 text-ink-700 hover:bg-ink-50'
+                            }`}>
+                      {String(h).padStart(2, '0')}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="text-[11px] text-ink-500 mt-1">
+                Click hours to enable specific firing times. Leave all unselected to use the legacy "every N hours" fallback below.
+              </div>
+            </div>
+            <div className={usingSpecificHours ? 'opacity-50 pointer-events-none' : ''}>
+              <label className="label">Every N hours (fallback)</label>
+              <input className="input w-32" type="number" min={1} max={24}
+                     value={form.every_n_hours}
+                     onChange={e => update('every_n_hours', Math.min(24, Math.max(1, Number(e.target.value || 1))))} />
+            </div>
+            <div>
+              <label className="label">Minute (0–59)</label>
+              <input className="input w-32" type="number" min={0} max={59}
+                     value={form.time_minute}
+                     onChange={e => update('time_minute', Math.min(59, Math.max(0, Number(e.target.value || 0))))} />
+            </div>
           </div>
         )}
 
@@ -168,6 +214,31 @@ export function ScheduleEditPage() {
               <input className="input" type="number" min={0} max={59}
                      value={form.time_minute}
                      onChange={e => update('time_minute', Math.min(59, Math.max(0, Number(e.target.value || 0))))} />
+            </div>
+          </div>
+        )}
+
+        {(form.frequency === 'daily' || form.frequency === 'hourly') && (
+          <div>
+            <label className="label">Days of week</label>
+            <div className="flex gap-1.5">
+              {DOW_SHORT.map((s, i) => {
+                const on = form.days_of_week.includes(i);
+                return (
+                  <button key={i} type="button" onClick={() => toggleDow(i)}
+                          title={DOW[i]}
+                          className={`h-8 w-9 rounded-md text-xs font-semibold border transition-colors ${
+                            on
+                              ? 'bg-amber-100 border-amber-400 text-amber-900'
+                              : 'bg-white border-ink-200 text-ink-700 hover:bg-ink-50'
+                          }`}>
+                    {s}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="text-[11px] text-ink-500 mt-1">
+              Leave all unselected to fire every day.
             </div>
           </div>
         )}

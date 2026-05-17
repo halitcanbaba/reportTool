@@ -499,7 +499,12 @@ struct ScheduleEntry
    int          time_minute         = 0;
    int          day_of_week         = 1;    // 0=Sun..6=Sat (weekly)
    int          day_of_month        = 1;    // 1-28 (monthly)
-   int          every_n_hours       = 1;    // hourly
+   int          every_n_hours       = 1;    // hourly legacy fallback
+   //--- v10 — richer recurrence. `hours`: subset of 0..23 (hourly only;
+   //--- empty falls back to every_n_hours). `days_of_week`: subset of 0..6
+   //--- with 0=Sun (used by daily + hourly; empty means every day).
+   std::vector<int> hours;
+   std::vector<int> days_of_week;
 
    std::string  telegram_chat_id;           // empty → fallback to global default
    std::string  delivery_format     = "csv"; // "csv" (SendDocument) | "text" (SendMessage summary)
