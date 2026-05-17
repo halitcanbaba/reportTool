@@ -4,6 +4,8 @@ import { TemplatesAPI } from '../api/templates';
 import type { Template } from '../types';
 import { fmtDateTime } from '../utils/format';
 import { copyName } from '../lib/duplicate';
+import { FolderedCard, type FolderedCol } from '../components/FolderedCard';
+import { IconTemplate } from '../components/icons';
 
 export function TemplateListPage() {
   const [items, setItems] = useState<Template[]>([]);
@@ -20,24 +22,49 @@ export function TemplateListPage() {
 
   const onDelete = async (id: number, name: string) => {
     if (!confirm(`Delete template "${name}"? Jobs that reference it will block the delete.`)) return;
-    try {
-      await TemplatesAPI.remove(id);
-      reload();
-    } catch (e: any) {
-      alert(e.message ?? 'delete failed');
-    }
+    try { await TemplatesAPI.remove(id); reload(); }
+    catch (e: any) { alert(e.message ?? 'delete failed'); }
   };
 
   const onDuplicate = async (t: Template) => {
     try {
       const full = await TemplatesAPI.get(t.id);
-      const { id, created_at, updated_at, ...rest } = full;
+      const { id: _id, created_at: _c, updated_at: _u, ...rest } = full;
+      void _id; void _c; void _u;
       await TemplatesAPI.create({ ...rest, name: copyName(t.name, items.map(i => i.name)) });
       reload();
     } catch (e: any) {
       alert(e.message ?? 'duplicate failed');
     }
   };
+
+  const columns: FolderedCol<Template>[] = [
+    {
+      key: 'name', header: 'Name', searchable: true,
+      searchValue: t => `${t.name} ${t.description ?? ''}`,
+      render: t => (
+        <div className="flex items-start gap-2">
+          <IconTemplate className="text-ink-500 shrink-0 mt-0.5" />
+          <div>
+            <div className="font-medium">{t.name}</div>
+            {t.description && <div className="text-xs text-ink-500">{t.description}</div>}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: 'date_params', header: 'Date Params',
+      searchValue: t => t.date_params.join(', '),
+      render: t => <span className="font-mono text-xs">{t.date_params.join(', ') || <span className="text-ink-400">none</span>}</span>,
+    },
+    { key: 'cols', header: 'Columns', align: 'right',
+      render: t => <span className="tabular-nums">{t.columns.length}</span> },
+    { key: 'top_n', header: 'Top N', align: 'right',
+      render: t => <span className="tabular-nums">{t.default_top_n}</span> },
+    { key: 'updated', header: 'Updated', searchable: true,
+      searchValue: t => fmtDateTime(t.updated_at),
+      render: t => <span className="text-xs text-ink-500">{fmtDateTime(t.updated_at)}</span> },
+  ];
 
   return (
     <div>
@@ -60,40 +87,21 @@ export function TemplateListPage() {
       )}
 
       {!loading && items.length > 0 && (
-        <div className="card overflow-hidden">
-          <table className="min-w-full text-sm">
-            <thead className="bg-ink-50 border-b border-ink-100">
-              <tr>
-                <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Name</th>
-                <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Date Params</th>
-                <th className="px-4 py-3 text-right font-medium text-ink-600 uppercase text-xs tracking-wide">Columns</th>
-                <th className="px-4 py-3 text-right font-medium text-ink-600 uppercase text-xs tracking-wide">Top N</th>
-                <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Updated</th>
-                <th className="px-4 py-3"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map(t => (
-                <tr key={t.id} className="border-b border-ink-50 last:border-0">
-                  <td className="px-4 py-3">
-                    <div className="font-medium">{t.name}</div>
-                    {t.description && <div className="text-xs text-ink-500">{t.description}</div>}
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs">{t.date_params.join(', ') || <span className="text-ink-400">none</span>}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">{t.columns.length}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">{t.default_top_n}</td>
-                  <td className="px-4 py-3 text-xs text-ink-500">{fmtDateTime(t.updated_at)}</td>
-                  <td className="px-4 py-3 text-right">
-                    <Link to={`/templates/${t.id}/run`} className="btn-primary text-xs px-2 py-1 mr-2">Run</Link>
-                    <Link to={`/templates/${t.id}/edit`} className="btn-secondary text-xs px-2 py-1 mr-2">Edit</Link>
-                    <button onClick={() => onDuplicate(t)} className="btn-secondary text-xs px-2 py-1 mr-2">Duplicate</button>
-                    <button onClick={() => onDelete(t.id, t.name)} className="btn-secondary text-xs px-2 py-1 text-red-600 hover:bg-red-50">Delete</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <FolderedCard<Template>
+          entityType="template"
+          rows={items}
+          rowKey={t => t.id}
+          folderIdOf={t => t.folder_id ?? null}
+          columns={columns}
+          rowActions={t => (
+            <>
+              <Link to={`/templates/${t.id}/run`} className="btn-primary text-xs px-2 py-1 mr-2">Run</Link>
+              <Link to={`/templates/${t.id}/edit`} className="btn-secondary text-xs px-2 py-1 mr-2">Edit</Link>
+              <button onClick={() => onDuplicate(t)} className="btn-secondary text-xs px-2 py-1 mr-2">Duplicate</button>
+              <button onClick={() => onDelete(t.id, t.name)} className="btn-secondary text-xs px-2 py-1 text-red-600 hover:bg-red-50">Delete</button>
+            </>
+          )}
+        />
       )}
     </div>
   );

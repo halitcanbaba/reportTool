@@ -101,6 +101,7 @@ namespace
          { "columns",       ColumnsToJson(t.columns) },
          { "sort",          json{ {"column_key", t.sort.column_key}, {"direction", t.sort.descending ? "desc" : "asc"} } },
          { "default_top_n", t.default_top_n },
+         { "folder_id",     t.folder_id ? json(t.folder_id) : json(nullptr) },
          { "created_at",    t.created_at },
          { "updated_at",    t.updated_at },
       };
@@ -127,6 +128,11 @@ namespace
             t->sort.descending = j["sort"].value("direction", std::string("desc")) != "asc";
          }
          t->default_top_n = j.value("default_top_n", 0u);
+         //--- folder_id is optional; null or absent leaves it 0 (Unfiled).
+         if(j.contains("folder_id") && j["folder_id"].is_number_integer())
+            t->folder_id = j["folder_id"].get<int64_t>();
+         else
+            t->folder_id = 0;
       }
       catch(const std::exception& e) { *err = e.what(); return false; }
       return true;

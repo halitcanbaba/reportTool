@@ -85,6 +85,20 @@ namespace SettingsRepo
    void        Set(SqliteDb& db, const std::string& key, const std::string& value);
 }
 
+namespace FolderRepo
+{
+   //--- Generic organisational folder across five entity types. Distinguished
+   //--- by `entity_type`. `item_count` is populated by ListByEntity, not stored.
+   std::vector<FolderRow>  ListByEntity(SqliteDb& db, const std::string& entity_type);
+   std::optional<FolderRow> Get(SqliteDb& db, int64_t id);
+   int64_t Insert(SqliteDb& db, FolderRow& f);
+   bool    Update(SqliteDb& db, FolderRow& f);
+   bool    Delete(SqliteDb& db, int64_t id);   // child rows fall to Unfiled via SET NULL
+   //--- Move an entity row to a folder (folder_id=0 → NULL = unfiled).
+   bool    Move(SqliteDb& db, const std::string& entity_type,
+                int64_t entity_id, int64_t folder_id);
+}
+
 namespace UserRepo
 {
    std::vector<User>           ListAll(SqliteDb& db);

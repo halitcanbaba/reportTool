@@ -10,6 +10,8 @@ import { resolvePreset } from '../lib/dateRange';
 import { fmtDateTime, todayLocal } from '../utils/format';
 import { copyName } from '../lib/duplicate';
 import type { ReadyMadeReport, Template, AccountFilter, Manager, ReadyMadeRunRequest } from '../types';
+import { FolderedCard, type FolderedCol } from '../components/FolderedCard';
+import { IconReadyMade } from '../components/icons';
 
 function describeStrategy(rm: ReadyMadeReport): string {
   if (rm.date_strategy === 'fixed') {
@@ -71,13 +73,56 @@ export function ReadyMadeListPage() {
   const onDuplicate = async (rm: ReadyMadeReport) => {
     try {
       const full = await ReadyMadeAPI.get(rm.id);
-      const { id, created_at, updated_at, ...rest } = full;
+      const { id: _id, created_at: _c, updated_at: _u, ...rest } = full;
+      void _id; void _c; void _u;
       await ReadyMadeAPI.create({ ...rest, name: copyName(rm.name, items.map(i => i.name)) });
       reload();
     } catch (e: any) {
       alert(e.message ?? 'duplicate failed');
     }
   };
+
+  const columns: FolderedCol<ReadyMadeReport>[] = [
+    {
+      key: 'name', header: 'Name', searchable: true,
+      searchValue: rm => `${rm.name} ${rm.description ?? ''}`,
+      render: rm => (
+        <div className="flex items-start gap-2">
+          <IconReadyMade className="text-ink-500 shrink-0 mt-0.5" />
+          <div>
+            <div className="font-medium">{rm.name}</div>
+            {rm.description && <div className="text-xs text-ink-500">{rm.description}</div>}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: 'template', header: 'Template', searchable: true,
+      searchValue: rm => templates.get(rm.template_id)?.name ?? '',
+      render: rm => {
+        const tpl = templates.get(rm.template_id);
+        return <span className="text-xs">{tpl?.name ?? <span className="text-red-600">missing #{rm.template_id}</span>}</span>;
+      },
+    },
+    {
+      key: 'account_filter', header: 'Account filter', searchable: true,
+      searchValue: rm => (rm.account_filter_id ? filters.get(rm.account_filter_id)?.name ?? '' : ''),
+      render: rm => {
+        const af = rm.account_filter_id ? filters.get(rm.account_filter_id) : null;
+        return <span className="text-xs">{af ? af.name : <span className="text-ink-400">— manager defaults —</span>}</span>;
+      },
+    },
+    {
+      key: 'date_strategy', header: 'Date strategy',
+      searchValue: rm => describeStrategy(rm),
+      render: rm => <span className="text-xs text-ink-700">{describeStrategy(rm)}</span>,
+    },
+    {
+      key: 'updated', header: 'Updated',
+      searchValue: rm => fmtDateTime(rm.updated_at),
+      render: rm => <span className="text-xs text-ink-500">{fmtDateTime(rm.updated_at)}</span>,
+    },
+  ];
 
   return (
     <div>
@@ -100,45 +145,22 @@ export function ReadyMadeListPage() {
       )}
 
       {!loading && items.length > 0 && (
-        <div className="card overflow-hidden">
-          <table className="min-w-full text-sm">
-            <thead className="bg-ink-50 border-b border-ink-100">
-              <tr>
-                <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Name</th>
-                <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Template</th>
-                <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Account filter</th>
-                <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Date strategy</th>
-                <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Updated</th>
-                <th className="px-4 py-3"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map(rm => {
-                const tpl = templates.get(rm.template_id);
-                const af  = rm.account_filter_id ? filters.get(rm.account_filter_id) : null;
-                return (
-                  <tr key={rm.id} className="border-b border-ink-50 last:border-0">
-                    <td className="px-4 py-3">
-                      <div className="font-medium">{rm.name}</div>
-                      {rm.description && <div className="text-xs text-ink-500">{rm.description}</div>}
-                    </td>
-                    <td className="px-4 py-3 text-xs">{tpl?.name ?? <span className="text-red-600">missing #{rm.template_id}</span>}</td>
-                    <td className="px-4 py-3 text-xs">{af ? af.name : <span className="text-ink-400">— manager defaults —</span>}</td>
-                    <td className="px-4 py-3 text-xs text-ink-700">{describeStrategy(rm)}</td>
-                    <td className="px-4 py-3 text-xs text-ink-500">{fmtDateTime(rm.updated_at)}</td>
-                    <td className="px-4 py-3 text-right whitespace-nowrap">
-                      <button onClick={() => onRun(rm.id)} className="btn-primary text-xs px-2 py-1 mr-2">▶ Run</button>
-                      <button onClick={() => setRunWith(rm)} className="btn-secondary text-xs px-2 py-1 mr-2">Run with…</button>
-                      <Link to={`/ready-made/${rm.id}/edit`} className="btn-secondary text-xs px-2 py-1 mr-2">Edit</Link>
-                      <button onClick={() => onDuplicate(rm)} className="btn-secondary text-xs px-2 py-1 mr-2">Duplicate</button>
-                      <button onClick={() => onDelete(rm.id, rm.name)} className="btn-secondary text-xs px-2 py-1 text-red-600 hover:bg-red-50">Delete</button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <FolderedCard<ReadyMadeReport>
+          entityType="ready_made"
+          rows={items}
+          rowKey={rm => rm.id}
+          folderIdOf={rm => rm.folder_id ?? null}
+          columns={columns}
+          rowActions={rm => (
+            <>
+              <button onClick={() => onRun(rm.id)} className="btn-primary text-xs px-2 py-1 mr-2">▶ Run</button>
+              <button onClick={() => setRunWith(rm)} className="btn-secondary text-xs px-2 py-1 mr-2">Run with…</button>
+              <Link to={`/ready-made/${rm.id}/edit`} className="btn-secondary text-xs px-2 py-1 mr-2">Edit</Link>
+              <button onClick={() => onDuplicate(rm)} className="btn-secondary text-xs px-2 py-1 mr-2">Duplicate</button>
+              <button onClick={() => onDelete(rm.id, rm.name)} className="btn-secondary text-xs px-2 py-1 text-red-600 hover:bg-red-50">Delete</button>
+            </>
+          )}
+        />
       )}
 
       {runWith && (

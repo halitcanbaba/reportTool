@@ -34,6 +34,7 @@ namespace
          { "relative_preset",   r.relative_preset },
          { "relative_n",        r.relative_n },
          { "top_n_override",    r.top_n_override },
+         { "folder_id",         r.folder_id ? json(r.folder_id) : json(nullptr) },
          { "created_at",        r.created_at },
          { "updated_at",        r.updated_at },
       };
@@ -61,6 +62,8 @@ namespace
          r->relative_preset = j.value("relative_preset", std::string("last_n_days"));
          r->relative_n      = j.value("relative_n",      7);
          r->top_n_override  = j.value("top_n_override",  0u);
+         r->folder_id = (j.contains("folder_id") && j["folder_id"].is_number_integer())
+            ? j["folder_id"].get<int64_t>() : 0;
       }
       catch(const std::exception& e) { *err = e.what(); return false; }
       return true;

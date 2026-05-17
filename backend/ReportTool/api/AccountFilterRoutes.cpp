@@ -35,6 +35,7 @@ namespace
          { "login_max",      f.login_max ? json(f.login_max) : json(nullptr) },
          { "manager_id",     f.manager_id ? json(f.manager_id) : json(nullptr) },
          { "user_predicate", f.user_predicate ? Expression::PredicateToJson(*f.user_predicate) : json(nullptr) },
+         { "folder_id",      f.folder_id ? json(f.folder_id) : json(nullptr) },
          { "created_at",     f.created_at },
          { "updated_at",     f.updated_at },
       };
@@ -60,6 +61,8 @@ namespace
             if(!Expression::PredicateFromJson(j["user_predicate"], &f->user_predicate, err))
                return false;
          }
+         f->folder_id = (j.contains("folder_id") && j["folder_id"].is_number_integer())
+            ? j["folder_id"].get<int64_t>() : 0;
       }
       catch(const std::exception& e) { *err = e.what(); return false; }
       return true;

@@ -5,6 +5,8 @@ import type { AccountFilter } from '../types';
 import { fmtDateTime } from '../utils/format';
 import { collectPredicateFields } from '../lib/blueprintInsert';
 import { copyName } from '../lib/duplicate';
+import { FolderedCard, type FolderedCol } from '../components/FolderedCard';
+import { IconFilter } from '../components/icons';
 
 export function AccountFilterListPage() {
   const [items, setItems] = useState<AccountFilter[]>([]);
@@ -28,13 +30,54 @@ export function AccountFilterListPage() {
   const onDuplicate = async (f: AccountFilter) => {
     try {
       const full = await AccountFiltersAPI.get(f.id);
-      const { id, created_at, updated_at, ...rest } = full;
+      const { id: _id, created_at: _c, updated_at: _u, ...rest } = full;
+      void _id; void _c; void _u;
       await AccountFiltersAPI.create({ ...rest, name: copyName(f.name, items.map(i => i.name)) });
       reload();
     } catch (e: any) {
       alert(e.message ?? 'duplicate failed');
     }
   };
+
+  const columns: FolderedCol<AccountFilter>[] = [
+    { key: 'name', header: 'Name', searchable: true,
+      searchValue: f => `${f.name} ${f.description ?? ''}`,
+      render: f => (
+        <span className="inline-flex items-center gap-2">
+          <IconFilter className="text-ink-500 shrink-0" />
+          <span className="font-medium">{f.name}</span>
+        </span>
+      ) },
+    { key: 'masks', header: 'Group Masks', searchable: true,
+      searchValue: f => f.group_masks.join(', '),
+      render: f => <span className="font-mono text-xs">{f.group_masks.join(', ') || <span className="text-ink-400">—</span>}</span> },
+    { key: 'regex', header: 'Regex',
+      searchValue: f => f.group_regex,
+      render: f => <span className="font-mono text-xs">{f.group_regex || <span className="text-ink-400">—</span>}</span> },
+    { key: 'login_range', header: 'Login range', align: 'right',
+      searchValue: f => `${f.login_min ?? ''} ${f.login_max ?? ''}`,
+      render: f => <span className="font-mono text-xs tabular-nums">{f.login_min ?? '—'} … {f.login_max ?? '—'}</span> },
+    { key: 'extras', header: 'Extra filters',
+      searchValue: f => collectPredicateFields(f.user_predicate ?? null).join(' '),
+      render: f => {
+        const extras = collectPredicateFields(f.user_predicate ?? null);
+        return extras.length === 0
+          ? <span className="text-ink-400 text-xs">—</span>
+          : (
+            <span className="flex flex-wrap gap-1">
+              {extras.map(name => (
+                <span key={name}
+                      className="inline-block px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 font-mono text-[11px]">
+                  {name}
+                </span>
+              ))}
+            </span>
+          );
+      } },
+    { key: 'updated', header: 'Updated',
+      searchValue: f => fmtDateTime(f.updated_at),
+      render: f => <span className="text-xs text-ink-500">{fmtDateTime(f.updated_at)}</span> },
+  ];
 
   return (
     <div>
@@ -57,55 +100,20 @@ export function AccountFilterListPage() {
       )}
 
       {!loading && items.length > 0 && (
-        <div className="card overflow-hidden">
-          <table className="min-w-full text-sm">
-            <thead className="bg-ink-50 border-b border-ink-100">
-              <tr>
-                <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Name</th>
-                <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Group Masks</th>
-                <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Regex</th>
-                <th className="px-4 py-3 text-right font-medium text-ink-600 uppercase text-xs tracking-wide">Login range</th>
-                <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Extra filters</th>
-                <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Updated</th>
-                <th className="px-4 py-3"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map(f => {
-                const extras = collectPredicateFields(f.user_predicate ?? null);
-                return (
-                  <tr key={f.id} className="border-b border-ink-50 last:border-0">
-                    <td className="px-4 py-3 font-medium">{f.name}</td>
-                    <td className="px-4 py-3 font-mono text-xs">{f.group_masks.join(', ') || <span className="text-ink-400">—</span>}</td>
-                    <td className="px-4 py-3 font-mono text-xs">{f.group_regex || <span className="text-ink-400">—</span>}</td>
-                    <td className="px-4 py-3 text-right tabular-nums font-mono text-xs">
-                      {f.login_min ?? '—'} … {f.login_max ?? '—'}
-                    </td>
-                    <td className="px-4 py-3 text-xs">
-                      {extras.length === 0
-                        ? <span className="text-ink-400">—</span>
-                        : <span className="flex flex-wrap gap-1">
-                            {extras.map(name => (
-                              <span key={name}
-                                    className="inline-block px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 font-mono text-[11px]">
-                                {name}
-                              </span>
-                            ))}
-                          </span>
-                      }
-                    </td>
-                    <td className="px-4 py-3 text-xs text-ink-500">{fmtDateTime(f.updated_at)}</td>
-                    <td className="px-4 py-3 text-right">
-                      <Link to={`/account-filters/${f.id}/edit`} className="btn-secondary text-xs px-2 py-1 mr-2">Edit</Link>
-                      <button onClick={() => onDuplicate(f)} className="btn-secondary text-xs px-2 py-1 mr-2">Duplicate</button>
-                      <button onClick={() => onDelete(f.id, f.name)} className="btn-secondary text-xs px-2 py-1 text-red-600 hover:bg-red-50">Delete</button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <FolderedCard<AccountFilter>
+          entityType="account_filter"
+          rows={items}
+          rowKey={f => f.id}
+          folderIdOf={f => f.folder_id ?? null}
+          columns={columns}
+          rowActions={f => (
+            <>
+              <Link to={`/account-filters/${f.id}/edit`} className="btn-secondary text-xs px-2 py-1 mr-2">Edit</Link>
+              <button onClick={() => onDuplicate(f)} className="btn-secondary text-xs px-2 py-1 mr-2">Duplicate</button>
+              <button onClick={() => onDelete(f.id, f.name)} className="btn-secondary text-xs px-2 py-1 text-red-600 hover:bg-red-50">Delete</button>
+            </>
+          )}
+        />
       )}
     </div>
   );

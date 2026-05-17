@@ -5,6 +5,13 @@ import { astToText } from '../lib/exprChips';
 import { fmtDateTime } from '../utils/format';
 import { copyName } from '../lib/duplicate';
 import type { FormulaBlueprint } from '../types';
+import { FolderedCard, type FolderedCol } from '../components/FolderedCard';
+import { IconBlueprint } from '../components/icons';
+
+function safePreview(b: FormulaBlueprint): string {
+  try { return b.expr ? astToText(b.expr) : ''; }
+  catch { return '(unrenderable)'; }
+}
 
 export function BlueprintListPage() {
   const [items, setItems] = useState<FormulaBlueprint[]>([]);
@@ -28,13 +35,52 @@ export function BlueprintListPage() {
   const onDuplicate = async (b: FormulaBlueprint) => {
     try {
       const full = await BlueprintsAPI.get(b.id);
-      const { id, created_at, updated_at, ...rest } = full;
+      const { id: _id, created_at: _c, updated_at: _u, ...rest } = full;
+      void _id; void _c; void _u;
       await BlueprintsAPI.create({ ...rest, name: copyName(b.name, items.map(i => i.name)) });
       reload();
     } catch (e: any) {
       alert(e.message ?? 'duplicate failed');
     }
   };
+
+  const columns: FolderedCol<FormulaBlueprint>[] = [
+    {
+      key: 'name', header: 'Name', searchable: true,
+      searchValue: b => `${b.name} ${b.description ?? ''}`,
+      render: b => (
+        <div className="flex items-start gap-2">
+          <IconBlueprint className="text-ink-500 shrink-0 mt-0.5" />
+          <div>
+            <div className="font-medium">{b.name}</div>
+            {b.description && <div className="text-xs text-ink-500">{b.description}</div>}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: 'date_params', header: 'Date params',
+      searchValue: b => b.date_params.join(', '),
+      render: b => <span className="font-mono text-xs">{b.date_params.join(', ') || <span className="text-ink-400">—</span>}</span>,
+    },
+    {
+      key: 'formula', header: 'Formula', searchable: true,
+      searchValue: b => safePreview(b),
+      render: b => {
+        const preview = safePreview(b);
+        return (
+          <div className="font-mono text-xs text-ink-700 truncate" style={{ maxWidth: 400 }} title={preview}>
+            {preview}
+          </div>
+        );
+      },
+    },
+    {
+      key: 'updated', header: 'Updated',
+      searchValue: b => fmtDateTime(b.updated_at),
+      render: b => <span className="text-xs text-ink-500">{fmtDateTime(b.updated_at)}</span>,
+    },
+  ];
 
   return (
     <div>
@@ -57,43 +103,20 @@ export function BlueprintListPage() {
       )}
 
       {!loading && items.length > 0 && (
-        <div className="card overflow-hidden">
-          <table className="min-w-full text-sm">
-            <thead className="bg-ink-50 border-b border-ink-100">
-              <tr>
-                <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Name</th>
-                <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Date params</th>
-                <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Formula</th>
-                <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Updated</th>
-                <th className="px-4 py-3"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map(b => {
-                let preview = '';
-                try { preview = b.expr ? astToText(b.expr) : ''; } catch { preview = '(unrenderable)'; }
-                return (
-                  <tr key={b.id} className="border-b border-ink-50 last:border-0">
-                    <td className="px-4 py-3">
-                      <div className="font-medium">{b.name}</div>
-                      {b.description && <div className="text-xs text-ink-500">{b.description}</div>}
-                    </td>
-                    <td className="px-4 py-3 font-mono text-xs">{b.date_params.join(', ') || <span className="text-ink-400">—</span>}</td>
-                    <td className="px-4 py-3 font-mono text-xs text-ink-700" style={{ maxWidth: 400 }}>
-                      <div className="truncate" title={preview}>{preview}</div>
-                    </td>
-                    <td className="px-4 py-3 text-xs text-ink-500">{fmtDateTime(b.updated_at)}</td>
-                    <td className="px-4 py-3 text-right">
-                      <Link to={`/blueprints/${b.id}/edit`} className="btn-secondary text-xs px-2 py-1 mr-2">Edit</Link>
-                      <button onClick={() => onDuplicate(b)} className="btn-secondary text-xs px-2 py-1 mr-2">Duplicate</button>
-                      <button onClick={() => onDelete(b.id, b.name)} className="btn-secondary text-xs px-2 py-1 text-red-600 hover:bg-red-50">Delete</button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <FolderedCard<FormulaBlueprint>
+          entityType="blueprint"
+          rows={items}
+          rowKey={b => b.id}
+          folderIdOf={b => b.folder_id ?? null}
+          columns={columns}
+          rowActions={b => (
+            <>
+              <Link to={`/blueprints/${b.id}/edit`} className="btn-secondary text-xs px-2 py-1 mr-2">Edit</Link>
+              <button onClick={() => onDuplicate(b)} className="btn-secondary text-xs px-2 py-1 mr-2">Duplicate</button>
+              <button onClick={() => onDelete(b.id, b.name)} className="btn-secondary text-xs px-2 py-1 text-red-600 hover:bg-red-50">Delete</button>
+            </>
+          )}
+        />
       )}
     </div>
   );

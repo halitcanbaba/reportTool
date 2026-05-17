@@ -235,6 +235,7 @@ namespace
             Expression::PredicateFromJson(j, &f.user_predicate, &err);
          }
       }
+      f.folder_id = st.IsNull(11) ? 0 : st.ColI64(11);
    }
 
    //--- Inline JSON of user_predicate; empty string if null.
@@ -251,7 +252,7 @@ std::vector<AccountFilter> AccountFilterRepo::ListAll(SqliteDb& db)
    std::vector<AccountFilter> out;
    SqliteStmt st(db,
       "SELECT id,name,description,group_masks,group_regex,login_min,login_max,manager_id,"
-      "created_at,updated_at,user_predicate_json FROM account_filters ORDER BY id");
+      "created_at,updated_at,user_predicate_json,folder_id FROM account_filters ORDER BY id");
    while(st.Step())
    {
       AccountFilter f; FillAccountFilterFromStmt(st, f);
@@ -265,7 +266,7 @@ std::optional<AccountFilter> AccountFilterRepo::Get(SqliteDb& db, int64_t id)
    std::lock_guard<std::mutex> lock(db.Mutex());
    SqliteStmt st(db,
       "SELECT id,name,description,group_masks,group_regex,login_min,login_max,manager_id,"
-      "created_at,updated_at,user_predicate_json FROM account_filters WHERE id=?");
+      "created_at,updated_at,user_predicate_json,folder_id FROM account_filters WHERE id=?");
    st.BindI64(1, id);
    if(!st.Step()) return std::nullopt;
    AccountFilter f; FillAccountFilterFromStmt(st, f);
@@ -278,7 +279,7 @@ int64_t AccountFilterRepo::Insert(SqliteDb& db, AccountFilter& f)
    const int64_t now = (int64_t)time(nullptr);
    SqliteStmt st(db,
       "INSERT INTO account_filters(name,description,group_masks,group_regex,login_min,login_max,"
-      "manager_id,created_at,updated_at,user_predicate_json) VALUES(?,?,?,?,?,?,?,?,?,?)");
+      "manager_id,created_at,updated_at,user_predicate_json,folder_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)");
    st.BindText(1, f.name);
    st.BindText(2, f.description);
    st.BindText(3, Join(f.group_masks, ','));
@@ -289,6 +290,7 @@ int64_t AccountFilterRepo::Insert(SqliteDb& db, AccountFilter& f)
    st.BindI64(8, now);
    st.BindI64(9, now);
    st.BindText(10, AccountFilterUserPredJson(f));
+   if(f.folder_id) st.BindI64(11, f.folder_id); else st.BindNull(11);
    st.Step();
    f.id = db.LastInsertRowid();
    f.created_at = f.updated_at = now;
@@ -301,7 +303,7 @@ bool AccountFilterRepo::Update(SqliteDb& db, AccountFilter& f)
    const int64_t now = (int64_t)time(nullptr);
    SqliteStmt st(db,
       "UPDATE account_filters SET name=?,description=?,group_masks=?,group_regex=?,"
-      "login_min=?,login_max=?,manager_id=?,updated_at=?,user_predicate_json=? WHERE id=?");
+      "login_min=?,login_max=?,manager_id=?,updated_at=?,user_predicate_json=?,folder_id=? WHERE id=?");
    st.BindText(1, f.name);
    st.BindText(2, f.description);
    st.BindText(3, Join(f.group_masks, ','));
@@ -311,7 +313,8 @@ bool AccountFilterRepo::Update(SqliteDb& db, AccountFilter& f)
    if(f.manager_id) st.BindI64(7, f.manager_id); else st.BindNull(7);
    st.BindI64(8, now);
    st.BindText(9, AccountFilterUserPredJson(f));
-   st.BindI64(10, f.id);
+   if(f.folder_id) st.BindI64(10, f.folder_id); else st.BindNull(10);
+   st.BindI64(11, f.id);
    st.Step();
    f.updated_at = now;
    return true;
@@ -343,6 +346,7 @@ namespace
       t.default_top_n = (uint32_t)st.ColInt(7);
       t.created_at    = st.ColI64(8);
       t.updated_at    = st.ColI64(9);
+      t.folder_id     = st.IsNull(10) ? 0 : st.ColI64(10);
    }
 }
 
@@ -352,7 +356,7 @@ std::vector<ReportTemplate> TemplateRepo::ListAll(SqliteDb& db)
    std::vector<ReportTemplate> out;
    SqliteStmt st(db,
       "SELECT id,name,description,row_model,date_params,columns_json,sort_json,default_top_n,"
-      "created_at,updated_at FROM report_templates ORDER BY id");
+      "created_at,updated_at,folder_id FROM report_templates ORDER BY id");
    while(st.Step())
    {
       ReportTemplate t; FillTemplateFromStmt(st, t);
@@ -366,7 +370,7 @@ std::optional<ReportTemplate> TemplateRepo::Get(SqliteDb& db, int64_t id)
    std::lock_guard<std::mutex> lock(db.Mutex());
    SqliteStmt st(db,
       "SELECT id,name,description,row_model,date_params,columns_json,sort_json,default_top_n,"
-      "created_at,updated_at FROM report_templates WHERE id=?");
+      "created_at,updated_at,folder_id FROM report_templates WHERE id=?");
    st.BindI64(1, id);
    if(!st.Step()) return std::nullopt;
    ReportTemplate t; FillTemplateFromStmt(st, t);
@@ -379,7 +383,7 @@ int64_t TemplateRepo::Insert(SqliteDb& db, ReportTemplate& t)
    const int64_t now = (int64_t)time(nullptr);
    SqliteStmt st(db,
       "INSERT INTO report_templates(name,description,row_model,date_params,columns_json,"
-      "sort_json,default_top_n,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)");
+      "sort_json,default_top_n,created_at,updated_at,folder_id) VALUES(?,?,?,?,?,?,?,?,?,?)");
    st.BindText(1, t.name);
    st.BindText(2, t.description);
    st.BindText(3, t.row_model.empty() ? "per_account" : t.row_model);
@@ -389,6 +393,7 @@ int64_t TemplateRepo::Insert(SqliteDb& db, ReportTemplate& t)
    st.BindInt (7, (int)t.default_top_n);
    st.BindI64 (8, now);
    st.BindI64 (9, now);
+   if(t.folder_id) st.BindI64(10, t.folder_id); else st.BindNull(10);
    st.Step();
    t.id = db.LastInsertRowid();
    t.created_at = t.updated_at = now;
@@ -401,7 +406,7 @@ bool TemplateRepo::Update(SqliteDb& db, ReportTemplate& t)
    const int64_t now = (int64_t)time(nullptr);
    SqliteStmt st(db,
       "UPDATE report_templates SET name=?,description=?,row_model=?,date_params=?,"
-      "columns_json=?,sort_json=?,default_top_n=?,updated_at=? WHERE id=?");
+      "columns_json=?,sort_json=?,default_top_n=?,updated_at=?,folder_id=? WHERE id=?");
    st.BindText(1, t.name);
    st.BindText(2, t.description);
    st.BindText(3, t.row_model.empty() ? "per_account" : t.row_model);
@@ -410,7 +415,8 @@ bool TemplateRepo::Update(SqliteDb& db, ReportTemplate& t)
    st.BindText(6, Expression::SortToJsonString(t.sort));
    st.BindInt (7, (int)t.default_top_n);
    st.BindI64 (8, now);
-   st.BindI64 (9, t.id);
+   if(t.folder_id) st.BindI64(9, t.folder_id); else st.BindNull(9);
+   st.BindI64 (10, t.id);
    st.Step();
    t.updated_at = now;
    return true;
@@ -440,6 +446,7 @@ namespace
       if(!j.is_discarded()) Expression::NodeFromJson(j, &b.expr, &err);
       b.created_at  = st.ColI64(5);
       b.updated_at  = st.ColI64(6);
+      b.folder_id   = st.IsNull(7) ? 0 : st.ColI64(7);
    }
 }
 
@@ -448,7 +455,7 @@ std::vector<FormulaBlueprint> BlueprintRepo::ListAll(SqliteDb& db)
    std::lock_guard<std::mutex> lock(db.Mutex());
    std::vector<FormulaBlueprint> out;
    SqliteStmt st(db,
-      "SELECT id,name,description,date_params,expr_json,created_at,updated_at "
+      "SELECT id,name,description,date_params,expr_json,created_at,updated_at,folder_id "
       "FROM formula_blueprints ORDER BY name");
    while(st.Step())
    {
@@ -462,7 +469,7 @@ std::optional<FormulaBlueprint> BlueprintRepo::Get(SqliteDb& db, int64_t id)
 {
    std::lock_guard<std::mutex> lock(db.Mutex());
    SqliteStmt st(db,
-      "SELECT id,name,description,date_params,expr_json,created_at,updated_at "
+      "SELECT id,name,description,date_params,expr_json,created_at,updated_at,folder_id "
       "FROM formula_blueprints WHERE id=?");
    st.BindI64(1, id);
    if(!st.Step()) return std::nullopt;
@@ -476,14 +483,15 @@ int64_t BlueprintRepo::Insert(SqliteDb& db, FormulaBlueprint& b)
    const int64_t now = (int64_t)time(nullptr);
    const std::string expr_json = b.expr ? Expression::NodeToJson(*b.expr).dump() : std::string("null");
    SqliteStmt st(db,
-      "INSERT INTO formula_blueprints(name,description,date_params,expr_json,created_at,updated_at) "
-      "VALUES(?,?,?,?,?,?)");
+      "INSERT INTO formula_blueprints(name,description,date_params,expr_json,created_at,updated_at,folder_id) "
+      "VALUES(?,?,?,?,?,?,?)");
    st.BindText(1, b.name);
    st.BindText(2, b.description);
    st.BindText(3, Expression::DateParamsToJsonString(b.date_params));
    st.BindText(4, expr_json);
    st.BindI64 (5, now);
    st.BindI64 (6, now);
+   if(b.folder_id) st.BindI64(7, b.folder_id); else st.BindNull(7);
    st.Step();
    b.id = db.LastInsertRowid();
    b.created_at = b.updated_at = now;
@@ -496,13 +504,14 @@ bool BlueprintRepo::Update(SqliteDb& db, FormulaBlueprint& b)
    const int64_t now = (int64_t)time(nullptr);
    const std::string expr_json = b.expr ? Expression::NodeToJson(*b.expr).dump() : std::string("null");
    SqliteStmt st(db,
-      "UPDATE formula_blueprints SET name=?,description=?,date_params=?,expr_json=?,updated_at=? WHERE id=?");
+      "UPDATE formula_blueprints SET name=?,description=?,date_params=?,expr_json=?,updated_at=?,folder_id=? WHERE id=?");
    st.BindText(1, b.name);
    st.BindText(2, b.description);
    st.BindText(3, Expression::DateParamsToJsonString(b.date_params));
    st.BindText(4, expr_json);
    st.BindI64 (5, now);
-   st.BindI64 (6, b.id);
+   if(b.folder_id) st.BindI64(6, b.folder_id); else st.BindNull(6);
+   st.BindI64 (7, b.id);
    st.Step();
    b.updated_at = now;
    return true;
@@ -801,6 +810,7 @@ namespace
       r.top_n_override     = (uint32_t)st.ColInt(9);
       r.created_at         = st.ColI64(10);
       r.updated_at         = st.ColI64(11);
+      r.folder_id          = st.IsNull(12) ? 0 : st.ColI64(12);
    }
 }
 
@@ -810,7 +820,7 @@ std::vector<ReadyMadeReport> ReadyMadeRepo::ListAll(SqliteDb& db)
    std::vector<ReadyMadeReport> out;
    SqliteStmt st(db,
       "SELECT id,name,description,template_id,account_filter_id,date_strategy,"
-      "fixed_dates_json,relative_preset,relative_n,top_n_override,created_at,updated_at "
+      "fixed_dates_json,relative_preset,relative_n,top_n_override,created_at,updated_at,folder_id "
       "FROM ready_made_reports ORDER BY id");
    while(st.Step())
    {
@@ -825,7 +835,7 @@ std::optional<ReadyMadeReport> ReadyMadeRepo::Get(SqliteDb& db, int64_t id)
    std::lock_guard<std::mutex> lock(db.Mutex());
    SqliteStmt st(db,
       "SELECT id,name,description,template_id,account_filter_id,date_strategy,"
-      "fixed_dates_json,relative_preset,relative_n,top_n_override,created_at,updated_at "
+      "fixed_dates_json,relative_preset,relative_n,top_n_override,created_at,updated_at,folder_id "
       "FROM ready_made_reports WHERE id=?");
    st.BindI64(1, id);
    if(!st.Step()) return std::nullopt;
@@ -840,7 +850,7 @@ int64_t ReadyMadeRepo::Insert(SqliteDb& db, ReadyMadeReport& r)
    SqliteStmt st(db,
       "INSERT INTO ready_made_reports(name,description,template_id,account_filter_id,"
       "date_strategy,fixed_dates_json,relative_preset,relative_n,top_n_override,"
-      "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)");
+      "created_at,updated_at,folder_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)");
    st.BindText(1, r.name);
    st.BindText(2, r.description);
    st.BindI64 (3, r.template_id);
@@ -852,6 +862,7 @@ int64_t ReadyMadeRepo::Insert(SqliteDb& db, ReadyMadeReport& r)
    st.BindInt (9, (int)r.top_n_override);
    st.BindI64 (10, now);
    st.BindI64 (11, now);
+   if(r.folder_id) st.BindI64(12, r.folder_id); else st.BindNull(12);
    st.Step();
    r.id = db.LastInsertRowid();
    r.created_at = r.updated_at = now;
@@ -865,7 +876,7 @@ bool ReadyMadeRepo::Update(SqliteDb& db, ReadyMadeReport& r)
    SqliteStmt st(db,
       "UPDATE ready_made_reports SET name=?,description=?,template_id=?,account_filter_id=?,"
       "date_strategy=?,fixed_dates_json=?,relative_preset=?,relative_n=?,top_n_override=?,"
-      "updated_at=? WHERE id=?");
+      "updated_at=?,folder_id=? WHERE id=?");
    st.BindText(1, r.name);
    st.BindText(2, r.description);
    st.BindI64 (3, r.template_id);
@@ -876,7 +887,8 @@ bool ReadyMadeRepo::Update(SqliteDb& db, ReadyMadeReport& r)
    st.BindInt (8, r.relative_n ? r.relative_n : 7);
    st.BindInt (9, (int)r.top_n_override);
    st.BindI64 (10, now);
-   st.BindI64 (11, r.id);
+   if(r.folder_id) st.BindI64(11, r.folder_id); else st.BindNull(11);
+   st.BindI64 (12, r.id);
    st.Step();
    r.updated_at = now;
    return true;
@@ -917,12 +929,13 @@ namespace
       s.updated_at       = st.ColI64(17);
       s.delivery_format  = st.ColText(18);
       if(s.delivery_format.empty()) s.delivery_format = "csv";
+      s.folder_id        = st.IsNull(19) ? 0 : st.ColI64(19);
    }
 
    const char* kScheduleSelectCols =
       "id,name,ready_made_id,frequency,time_hour,time_minute,day_of_week,day_of_month,"
       "every_n_hours,telegram_chat_id,enabled,next_run_at,last_run_at,last_status,"
-      "last_job_id,last_error,created_at,updated_at,delivery_format";
+      "last_job_id,last_error,created_at,updated_at,delivery_format,folder_id";
 }
 
 std::vector<ScheduleEntry> ScheduleRepo::ListAll(SqliteDb& db)
@@ -955,8 +968,8 @@ int64_t ScheduleRepo::Insert(SqliteDb& db, ScheduleEntry& s)
    SqliteStmt st(db,
       "INSERT INTO schedules(name,ready_made_id,frequency,time_hour,time_minute,"
       "day_of_week,day_of_month,every_n_hours,telegram_chat_id,enabled,next_run_at,"
-      "last_run_at,last_status,last_error,created_at,updated_at,delivery_format) "
-      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+      "last_run_at,last_status,last_error,created_at,updated_at,delivery_format,folder_id) "
+      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
    st.BindText(1,  s.name);
    st.BindI64 (2,  s.ready_made_id);
    st.BindText(3,  s.frequency.empty() ? "daily" : s.frequency);
@@ -974,6 +987,7 @@ int64_t ScheduleRepo::Insert(SqliteDb& db, ScheduleEntry& s)
    st.BindI64 (15, now);
    st.BindI64 (16, now);
    st.BindText(17, s.delivery_format.empty() ? "csv" : s.delivery_format);
+   if(s.folder_id) st.BindI64(18, s.folder_id); else st.BindNull(18);
    st.Step();
    s.id = db.LastInsertRowid();
    s.created_at = s.updated_at = now;
@@ -987,7 +1001,7 @@ bool ScheduleRepo::Update(SqliteDb& db, ScheduleEntry& s)
    SqliteStmt st(db,
       "UPDATE schedules SET name=?,ready_made_id=?,frequency=?,time_hour=?,time_minute=?,"
       "day_of_week=?,day_of_month=?,every_n_hours=?,telegram_chat_id=?,enabled=?,"
-      "next_run_at=?,updated_at=?,delivery_format=? WHERE id=?");
+      "next_run_at=?,updated_at=?,delivery_format=?,folder_id=? WHERE id=?");
    st.BindText(1,  s.name);
    st.BindI64 (2,  s.ready_made_id);
    st.BindText(3,  s.frequency.empty() ? "daily" : s.frequency);
@@ -1001,7 +1015,8 @@ bool ScheduleRepo::Update(SqliteDb& db, ScheduleEntry& s)
    st.BindI64 (11, s.next_run_at);
    st.BindI64 (12, now);
    st.BindText(13, s.delivery_format.empty() ? "csv" : s.delivery_format);
-   st.BindI64 (14, s.id);
+   if(s.folder_id) st.BindI64(14, s.folder_id); else st.BindNull(14);
+   st.BindI64 (15, s.id);
    st.Step();
    s.updated_at = now;
    return true;
@@ -1312,4 +1327,124 @@ int64_t SessionRepo::DeleteExpired(SqliteDb& db, int64_t now)
    st.BindI64(1, now);
    st.Step();
    return (int64_t)sqlite3_changes(db.Handle());
+}
+
+//+--------------------- FolderRepo ---------------------------------+
+
+namespace
+{
+   //--- Pick the entity table whose folder_id child-count we should report.
+   //--- Returns nullptr (and logs nothing) for an unknown entity_type — the
+   //--- caller already validates against the schema CHECK.
+   const char* EntityTableFor(const std::string& entity_type)
+   {
+      if(entity_type == "template")        return "report_templates";
+      if(entity_type == "schedule")        return "schedules";
+      if(entity_type == "blueprint")       return "formula_blueprints";
+      if(entity_type == "ready_made")      return "ready_made_reports";
+      if(entity_type == "account_filter")  return "account_filters";
+      return nullptr;
+   }
+
+   void FillFolderFromStmt(SqliteStmt& st, FolderRow& f)
+   {
+      f.id          = st.ColI64(0);
+      f.entity_type = st.ColText(1);
+      f.name        = st.ColText(2);
+      f.sort_order  = st.ColInt(3);
+      f.created_at  = st.ColI64(4);
+      f.updated_at  = st.ColI64(5);
+   }
+}
+
+std::vector<FolderRow> FolderRepo::ListByEntity(SqliteDb& db, const std::string& entity_type)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   std::vector<FolderRow> out;
+   const char* tbl = EntityTableFor(entity_type);
+   //--- Inline the entity table name into the COUNT subquery; entity_type is
+   //--- validated upstream and the mapping is a closed set, so this is safe.
+   const std::string sql = std::string(
+      "SELECT id, entity_type, name, sort_order, created_at, updated_at, "
+      "(SELECT COUNT(*) FROM ") + (tbl ? tbl : "report_templates") +
+      " WHERE folder_id=folders.id) AS item_count "
+      "FROM folders WHERE entity_type=? ORDER BY sort_order, id";
+   SqliteStmt st(db, sql);
+   st.BindText(1, entity_type);
+   while(st.Step())
+   {
+      FolderRow f; FillFolderFromStmt(st, f);
+      f.item_count = st.ColI64(6);
+      out.push_back(std::move(f));
+   }
+   return out;
+}
+
+std::optional<FolderRow> FolderRepo::Get(SqliteDb& db, int64_t id)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   SqliteStmt st(db,
+      "SELECT id, entity_type, name, sort_order, created_at, updated_at "
+      "FROM folders WHERE id=?");
+   st.BindI64(1, id);
+   if(!st.Step()) return std::nullopt;
+   FolderRow f; FillFolderFromStmt(st, f);
+   return f;
+}
+
+int64_t FolderRepo::Insert(SqliteDb& db, FolderRow& f)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   const int64_t now = (int64_t)time(nullptr);
+   SqliteStmt st(db,
+      "INSERT INTO folders(entity_type, name, sort_order, created_at, updated_at) "
+      "VALUES(?,?,?,?,?)");
+   st.BindText(1, f.entity_type);
+   st.BindText(2, f.name);
+   st.BindInt (3, f.sort_order);
+   st.BindI64 (4, now);
+   st.BindI64 (5, now);
+   st.Step();
+   f.id = db.LastInsertRowid();
+   f.created_at = f.updated_at = now;
+   return f.id;
+}
+
+bool FolderRepo::Update(SqliteDb& db, FolderRow& f)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   const int64_t now = (int64_t)time(nullptr);
+   SqliteStmt st(db,
+      "UPDATE folders SET name=?, sort_order=?, updated_at=? WHERE id=?");
+   st.BindText(1, f.name);
+   st.BindInt (2, f.sort_order);
+   st.BindI64 (3, now);
+   st.BindI64 (4, f.id);
+   st.Step();
+   f.updated_at = now;
+   return true;
+}
+
+bool FolderRepo::Delete(SqliteDb& db, int64_t id)
+{
+   //--- ON DELETE SET NULL drops child folder_ids automatically.
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   SqliteStmt st(db, "DELETE FROM folders WHERE id=?");
+   st.BindI64(1, id);
+   st.Step();
+   return true;
+}
+
+bool FolderRepo::Move(SqliteDb& db, const std::string& entity_type,
+                      int64_t entity_id, int64_t folder_id)
+{
+   const char* tbl = EntityTableFor(entity_type);
+   if(!tbl) return false;
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   const std::string sql = std::string("UPDATE ") + tbl + " SET folder_id=? WHERE id=?";
+   SqliteStmt st(db, sql);
+   if(folder_id) st.BindI64(1, folder_id); else st.BindNull(1);
+   st.BindI64(2, entity_id);
+   st.Step();
+   return sqlite3_changes(db.Handle()) > 0;
 }

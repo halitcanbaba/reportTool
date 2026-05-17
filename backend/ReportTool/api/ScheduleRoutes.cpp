@@ -33,6 +33,7 @@ namespace
          { "telegram_chat_id",  s.telegram_chat_id },
          { "delivery_format",   s.delivery_format.empty() ? std::string("csv") : s.delivery_format },
          { "enabled",           s.enabled },
+         { "folder_id",         s.folder_id ? json(s.folder_id) : json(nullptr) },
          { "next_run_at",       s.next_run_at },
          { "last_run_at",       s.last_run_at },
          { "last_status",       s.last_status },
@@ -63,6 +64,8 @@ namespace
          if(s->delivery_format != "csv" && s->delivery_format != "text")
             { *err = "delivery_format must be 'csv' or 'text'"; return false; }
          s->enabled          = j.value("enabled",          true);
+         s->folder_id = (j.contains("folder_id") && j["folder_id"].is_number_integer())
+            ? j["folder_id"].get<int64_t>() : 0;
       }
       catch(const std::exception& e) { *err = e.what(); return false; }
       return true;

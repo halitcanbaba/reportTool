@@ -29,6 +29,7 @@ namespace
          { "description", b.description },
          { "date_params", dps },
          { "expr",        b.expr ? Expression::NodeToJson(*b.expr) : json(nullptr) },
+         { "folder_id",   b.folder_id ? json(b.folder_id) : json(nullptr) },
          { "created_at",  b.created_at },
          { "updated_at",  b.updated_at },
       };
@@ -49,6 +50,8 @@ namespace
          if(!j.contains("expr") || j["expr"].is_null())
          { *err = "expr is required"; return false; }
          if(!Expression::NodeFromJson(j["expr"], &b->expr, err)) return false;
+         b->folder_id = (j.contains("folder_id") && j["folder_id"].is_number_integer())
+            ? j["folder_id"].get<int64_t>() : 0;
       }
       catch(const std::exception& e) { *err = e.what(); return false; }
       return true;

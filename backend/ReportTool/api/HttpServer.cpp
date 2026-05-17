@@ -19,6 +19,7 @@
 #include "SettingsRoutes.h"
 #include "AuthRoutes.h"
 #include "UserRoutes.h"
+#include "FolderRoutes.h"
 
 using nlohmann::json;
 
@@ -173,6 +174,7 @@ void HttpServer::RegisterRoutes()
    ReadyMadeRoutes     ::Register(*m_srv, m_ctx);
    ScheduleRoutes      ::Register(*m_srv, m_ctx);
    SettingsRoutes      ::Register(*m_srv, m_ctx);
+   FolderRoutes        ::Register(*m_srv, m_ctx);
    ReportRoutes        ::Register(*m_srv, m_ctx);
 }
 

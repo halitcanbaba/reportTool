@@ -3,7 +3,7 @@
 
 namespace
 {
-   constexpr int kCurrentSchemaVersion = 8;
+   constexpr int kCurrentSchemaVersion = 9;
 
    //--- Tables that survive every version (managers, regex_filters,
    //--- daily_cache, deal_cache). These are idempotent.
@@ -301,6 +301,42 @@ namespace
          return false;
       return WriteVersion(db, 8, err);
    }
+
+   //--- v9 tables: folders + folder_id FK on the five user-content entities.
+   //--- Each entity table gets a nullable folder_id with SET NULL on delete so
+   //--- removing a folder doesn't lose the children — they fall back to Unfiled.
+   const char* kV9CreateFolders =
+      "CREATE TABLE IF NOT EXISTS folders ("
+      "  id          INTEGER PRIMARY KEY AUTOINCREMENT,"
+      "  entity_type TEXT NOT NULL CHECK(entity_type IN ('template','schedule','blueprint','ready_made','account_filter')),"
+      "  name        TEXT NOT NULL,"
+      "  sort_order  INTEGER NOT NULL DEFAULT 0,"
+      "  created_at  INTEGER NOT NULL,"
+      "  updated_at  INTEGER NOT NULL"
+      ");"
+      "CREATE INDEX IF NOT EXISTS ix_folders_entity ON folders(entity_type, sort_order);";
+
+   bool AddFolderIdColumns(SqliteDb& db, std::string* err)
+   {
+      const char* tables[] = {
+         "report_templates", "schedules", "formula_blueprints",
+         "ready_made_reports", "account_filters",
+      };
+      for(const char* t : tables)
+      {
+         const std::string sql = std::string("ALTER TABLE ") + t
+            + " ADD COLUMN folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL";
+         if(!db.Exec(sql, err)) return false;
+      }
+      return true;
+   }
+
+   bool MigrateToV9(SqliteDb& db, std::string* err)
+   {
+      if(!db.Exec(kV9CreateFolders, err)) return false;
+      if(!AddFolderIdColumns(db, err)) return false;
+      return WriteVersion(db, 9, err);
+   }
 }
 
 bool Schema::Apply(SqliteDb& db, std::string* err)
@@ -323,6 +359,9 @@ bool Schema::Apply(SqliteDb& db, std::string* err)
       //--- v8 column on the fresh-install path (kV5Tables hasn't been
       //--- consolidated yet — kept as ALTER to mirror the migration).
       if(!db.Exec("ALTER TABLE schedules ADD COLUMN delivery_format TEXT NOT NULL DEFAULT 'csv'", err)) return false;
+      //--- v9: folders table + folder_id columns on the five entity tables.
+      if(!db.Exec(kV9CreateFolders, err)) return false;
+      if(!AddFolderIdColumns(db, err)) return false;
       return WriteVersion(db, kCurrentSchemaVersion, err);
    }
    if(v < 2)
@@ -352,6 +391,10 @@ bool Schema::Apply(SqliteDb& db, std::string* err)
    if(v < 8)
    {
       if(!MigrateToV8(db, err)) return false;
+   }
+   if(v < 9)
+   {
+      if(!MigrateToV9(db, err)) return false;
    }
    //--- v >= current: no-op.
    return true;

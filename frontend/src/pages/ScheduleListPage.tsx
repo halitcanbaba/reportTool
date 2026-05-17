@@ -6,6 +6,8 @@ import { TelegramSettingsCard } from '../components/TelegramSettingsCard';
 import { fmtDateTime } from '../utils/format';
 import { copyName } from '../lib/duplicate';
 import type { ScheduleEntry, ReadyMadeReport } from '../types';
+import { FolderedCard, type FolderedCol } from '../components/FolderedCard';
+import { IconSchedule } from '../components/icons';
 
 function describeFreq(s: ScheduleEntry): string {
   const t = `${String(s.time_hour).padStart(2, '0')}:${String(s.time_minute).padStart(2, '0')} UTC`;
@@ -55,10 +57,8 @@ export function ScheduleListPage() {
   };
 
   const onToggle = async (s: ScheduleEntry) => {
-    try {
-      await SchedulesAPI.update(s.id, { enabled: !s.enabled });
-      reload();
-    } catch (e: any) { alert(e.message ?? 'update failed'); }
+    try { await SchedulesAPI.update(s.id, { enabled: !s.enabled }); reload(); }
+    catch (e: any) { alert(e.message ?? 'update failed'); }
   };
 
   const onRunNow = async (s: ScheduleEntry) => {
@@ -70,10 +70,9 @@ export function ScheduleListPage() {
   const onDuplicate = async (s: ScheduleEntry) => {
     try {
       const full = await SchedulesAPI.get(s.id);
-      const { id, next_run_at, last_run_at, last_status, last_job_id, last_error,
-              created_at, updated_at, ...rest } = full;
-      //--- Duplicate starts disabled so the operator can review timing before
-      //--- it begins firing alongside the original.
+      const { id: _id, next_run_at: _n, last_run_at: _l, last_status: _ls, last_job_id: _lj, last_error: _le,
+              created_at: _c, updated_at: _u, ...rest } = full;
+      void _id; void _n; void _l; void _ls; void _lj; void _le; void _c; void _u;
       await SchedulesAPI.create({
         ...rest,
         name:    copyName(s.name, items.map(i => i.name)),
@@ -85,78 +84,99 @@ export function ScheduleListPage() {
     }
   };
 
-  return (
-    <div className="grid grid-cols-3 gap-6">
-      <div className="col-span-2">
-        <div className="flex items-center justify-between mb-6">
+  const columns: FolderedCol<ScheduleEntry>[] = [
+    {
+      key: 'name', header: 'Name', searchable: true,
+      searchValue: s => `${s.name} ${s.telegram_chat_id ?? ''}`,
+      render: s => (
+        <div className="flex items-start gap-2">
+          <IconSchedule className="text-ink-500 shrink-0 mt-0.5" />
           <div>
-            <h1 className="text-2xl font-semibold text-ink-900">Scheduler</h1>
-            <p className="text-sm text-ink-500 mt-1">Recurring ready-made reports delivered via Telegram. All times in UTC (MT5 broker trading day).</p>
+            <div className="font-medium flex items-center gap-2">
+              <input type="checkbox" checked={s.enabled} onChange={() => onToggle(s)} title="enabled"
+                     onPointerDown={e => e.stopPropagation()}
+                     onClick={e => e.stopPropagation()} />
+              {s.name}
+            </div>
+            {s.telegram_chat_id && <div className="text-[11px] text-ink-500 font-mono mt-0.5">→ {s.telegram_chat_id}</div>}
           </div>
-          <Link to="/schedules/new" className="btn-primary">+ New schedule</Link>
         </div>
-
-        {error && <div className="card p-4 mb-4 border-red-200 bg-red-50 text-red-800 text-sm">{error}</div>}
-        {loading && <div className="text-ink-400 text-sm">Loading…</div>}
-
-        {!loading && items.length === 0 && (
-          <div className="card p-12 text-center">
-            <div className="text-ink-400 mb-4">No schedules yet.</div>
-            <Link to="/schedules/new" className="btn-primary">Create the first schedule</Link>
+      ),
+    },
+    {
+      key: 'ready_made', header: 'Ready-made', searchable: true,
+      searchValue: s => readyMades.get(s.ready_made_id)?.name ?? '',
+      render: s => {
+        const rm = readyMades.get(s.ready_made_id);
+        return <span className="text-xs">{rm?.name ?? <span className="text-red-600">missing #{s.ready_made_id}</span>}</span>;
+      },
+    },
+    {
+      key: 'freq', header: 'Frequency',
+      searchValue: s => describeFreq(s),
+      render: s => <span className="text-xs">{describeFreq(s)}</span>,
+    },
+    {
+      key: 'next', header: 'Next run',
+      searchValue: s => (s.next_run_at ? fmtDateTime(s.next_run_at) : ''),
+      render: s => <span className="text-xs text-ink-600">{s.next_run_at ? fmtDateTime(s.next_run_at) : '—'}</span>,
+    },
+    {
+      key: 'status', header: 'Last status',
+      searchValue: s => s.last_status,
+      render: s => (
+        <div>
+          <div className="flex items-center gap-2">
+            {statusBadge(s.last_status)}
+            {s.last_run_at > 0 && <span className="text-[11px] text-ink-500">{fmtDateTime(s.last_run_at)}</span>}
           </div>
-        )}
+          {s.last_error && <div className="text-[11px] text-red-700 font-mono mt-1 line-clamp-2" title={s.last_error}>{s.last_error}</div>}
+        </div>
+      ),
+    },
+  ];
 
-        {!loading && items.length > 0 && (
-          <div className="card overflow-hidden">
-            <table className="min-w-full text-sm">
-              <thead className="bg-ink-50 border-b border-ink-100">
-                <tr>
-                  <th className="px-3 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Name</th>
-                  <th className="px-3 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Ready-made</th>
-                  <th className="px-3 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Frequency</th>
-                  <th className="px-3 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Next run</th>
-                  <th className="px-3 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Last status</th>
-                  <th className="px-3 py-3"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map(s => {
-                  const rm = readyMades.get(s.ready_made_id);
-                  return (
-                    <tr key={s.id} className={`border-b border-ink-50 last:border-0 ${s.enabled ? '' : 'opacity-60'}`}>
-                      <td className="px-3 py-3">
-                        <div className="font-medium flex items-center gap-2">
-                          <input type="checkbox" checked={s.enabled} onChange={() => onToggle(s)} title="enabled" />
-                          {s.name}
-                        </div>
-                        {s.telegram_chat_id && <div className="text-[11px] text-ink-500 font-mono mt-0.5">→ {s.telegram_chat_id}</div>}
-                      </td>
-                      <td className="px-3 py-3 text-xs">{rm?.name ?? <span className="text-red-600">missing #{s.ready_made_id}</span>}</td>
-                      <td className="px-3 py-3 text-xs">{describeFreq(s)}</td>
-                      <td className="px-3 py-3 text-xs text-ink-600">{s.next_run_at ? fmtDateTime(s.next_run_at) : '—'}</td>
-                      <td className="px-3 py-3">
-                        <div className="flex items-center gap-2">
-                          {statusBadge(s.last_status)}
-                          {s.last_run_at > 0 && <span className="text-[11px] text-ink-500">{fmtDateTime(s.last_run_at)}</span>}
-                        </div>
-                        {s.last_error && <div className="text-[11px] text-red-700 font-mono mt-1 line-clamp-2" title={s.last_error}>{s.last_error}</div>}
-                      </td>
-                      <td className="px-3 py-3 text-right whitespace-nowrap">
-                        <button onClick={() => onRunNow(s)} className="btn-secondary text-xs px-2 py-1 mr-1">Run now</button>
-                        <Link to={`/schedules/${s.id}/edit`} className="btn-secondary text-xs px-2 py-1 mr-1">Edit</Link>
-                        <button onClick={() => onDuplicate(s)} className="btn-secondary text-xs px-2 py-1 mr-1">Duplicate</button>
-                        <button onClick={() => onDelete(s.id, s.name)} className="btn-secondary text-xs px-2 py-1 text-red-600 hover:bg-red-50">Delete</button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold text-ink-900">Scheduler</h1>
+          <p className="text-sm text-ink-500 mt-1">Recurring ready-made reports delivered via Telegram. All times in UTC (MT5 broker trading day).</p>
+        </div>
+        <Link to="/schedules/new" className="btn-primary">+ New schedule</Link>
       </div>
 
-      <div className="col-span-1 space-y-4">
+      {error && <div className="card p-4 border-red-200 bg-red-50 text-red-800 text-sm">{error}</div>}
+      {loading && <div className="text-ink-400 text-sm">Loading…</div>}
+
+      {!loading && items.length === 0 && (
+        <div className="card p-12 text-center">
+          <div className="text-ink-400 mb-4">No schedules yet.</div>
+          <Link to="/schedules/new" className="btn-primary">Create the first schedule</Link>
+        </div>
+      )}
+
+      {!loading && items.length > 0 && (
+        <FolderedCard<ScheduleEntry>
+          entityType="schedule"
+          rows={items}
+          rowKey={s => s.id}
+          folderIdOf={s => s.folder_id ?? null}
+          rowClassName={s => (s.enabled ? '' : 'opacity-60')}
+          columns={columns}
+          rowActions={s => (
+            <>
+              <button onClick={() => onRunNow(s)} className="btn-secondary text-xs px-2 py-1 mr-1">Run now</button>
+              <Link to={`/schedules/${s.id}/edit`} className="btn-secondary text-xs px-2 py-1 mr-1">Edit</Link>
+              <button onClick={() => onDuplicate(s)} className="btn-secondary text-xs px-2 py-1 mr-1">Duplicate</button>
+              <button onClick={() => onDelete(s.id, s.name)} className="btn-secondary text-xs px-2 py-1 text-red-600 hover:bg-red-50">Delete</button>
+            </>
+          )}
+        />
+      )}
+
+      {/* Settings / help footer — two compact cards below the full-width table */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <TelegramSettingsCard />
         <div className="card p-4 space-y-2 text-xs text-ink-600">
           <div className="font-semibold text-ink-700 uppercase tracking-wide">How delivery works</div>

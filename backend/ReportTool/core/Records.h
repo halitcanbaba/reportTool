@@ -296,6 +296,7 @@ struct AccountFilter
    //--- Optional client-side post-filter applied to each fetched user row
    //--- (covers IMTUser fields like comment, agent, zip, country, …).
    std::shared_ptr<Predicate> user_predicate;
+   int64_t                   folder_id   = 0;     // 0 = NULL = unfiled (FK -> folders.id)
    int64_t                   created_at  = 0;
    int64_t                   updated_at  = 0;
 };
@@ -429,6 +430,7 @@ struct FormulaBlueprint
    std::string               description;
    std::vector<std::string>  date_params;       // param slot names used inside expr
    std::shared_ptr<ExprNode> expr;
+   int64_t                   folder_id   = 0;   // 0 = NULL = unfiled (FK -> folders.id)
    int64_t                   created_at  = 0;
    int64_t                   updated_at  = 0;
 };
@@ -443,6 +445,7 @@ struct ReportTemplate
    std::vector<ColumnSpec>  columns;
    SortSpec                 sort;
    uint32_t                 default_top_n = 0;   // 0 = no limit
+   int64_t                  folder_id     = 0;   // 0 = NULL = unfiled (FK -> folders.id)
    int64_t                  created_at    = 0;
    int64_t                  updated_at    = 0;
 };
@@ -479,6 +482,7 @@ struct ReadyMadeReport
 
    uint32_t     top_n_override     = 0;     // 0 = use template default
 
+   int64_t      folder_id          = 0;     // 0 = NULL = unfiled (FK -> folders.id)
    int64_t      created_at         = 0;
    int64_t      updated_at         = 0;
 };
@@ -500,6 +504,7 @@ struct ScheduleEntry
    std::string  telegram_chat_id;           // empty → fallback to global default
    std::string  delivery_format     = "csv"; // "csv" (SendDocument) | "text" (SendMessage summary)
    bool         enabled             = true;
+   int64_t      folder_id           = 0;    // 0 = NULL = unfiled (FK -> folders.id)
 
    int64_t      next_run_at         = 0;    // UTC unix
    int64_t      last_run_at         = 0;
@@ -509,6 +514,20 @@ struct ScheduleEntry
 
    int64_t      created_at          = 0;
    int64_t      updated_at          = 0;
+};
+
+//--- User-defined organisational folder over a single entity type. Linked to
+//--- entity rows via the entity table's `folder_id` (SET NULL on delete).
+//--- `item_count` isn't a column — it's populated by FolderRepo::ListByEntity.
+struct FolderRow
+{
+   int64_t     id          = 0;
+   std::string entity_type;       // "template"|"schedule"|"blueprint"|"ready_made"|"account_filter"
+   std::string name;
+   int         sort_order  = 0;
+   int64_t     item_count  = 0;
+   int64_t     created_at  = 0;
+   int64_t     updated_at  = 0;
 };
 
 //--- Key/value app settings (app_settings table)

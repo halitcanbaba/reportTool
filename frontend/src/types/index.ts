@@ -59,11 +59,27 @@ export type AccountFilter = {
   login_max: number | null;
   manager_id: number | null;
   user_predicate?: Predicate | null;
+  folder_id?: number | null;
   created_at: number;
   updated_at: number;
 };
 
 export type AccountFilterInput = Omit<AccountFilter, 'id' | 'created_at' | 'updated_at'>;
+
+//--- Organisational folders shared across the five user-content entities.
+
+export type FolderEntityType =
+  | 'template' | 'schedule' | 'blueprint' | 'ready_made' | 'account_filter';
+
+export type Folder = {
+  id: number;
+  entity_type: FolderEntityType;
+  name: string;
+  sort_order: number;
+  item_count: number;
+  created_at: number;
+  updated_at: number;
+};
 
 //--- Predicate (per-row filter for aggregator fields) ------------
 
@@ -164,6 +180,7 @@ export type Template = {
   columns: Column[];
   sort: SortSpec;
   default_top_n: number;
+  folder_id?: number | null;
   created_at: number;
   updated_at: number;
 };
@@ -176,6 +193,7 @@ export type FormulaBlueprint = {
   description: string;
   date_params: string[];
   expr: ExprNode;
+  folder_id?: number | null;
   created_at: number;
   updated_at: number;
 };
@@ -199,6 +217,7 @@ export type ReadyMadeReport = {
   relative_preset: RelativePreset;
   relative_n: number;
   top_n_override: number;
+  folder_id?: number | null;
   created_at: number;
   updated_at: number;
 };
@@ -230,6 +249,7 @@ export type ScheduleEntry = {
   telegram_chat_id: string;
   delivery_format: ScheduleDeliveryFormat;
   enabled: boolean;
+  folder_id?: number | null;
   next_run_at: number;
   last_run_at: number;
   last_status: string;

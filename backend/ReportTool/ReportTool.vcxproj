@@ -106,6 +106,7 @@
     <ClInclude Include="api\SettingsRoutes.h" />
     <ClInclude Include="api\AuthRoutes.h" />
     <ClInclude Include="api\UserRoutes.h" />
+    <ClInclude Include="api\FolderRoutes.h" />
     <ClInclude Include="api\CurrentUser.h" />
     <ClInclude Include="core\TelegramClient.h" />
     <ClInclude Include="core\Scheduler.h" />
@@ -146,6 +147,7 @@
     <ClCompile Include="api\SettingsRoutes.cpp" />
     <ClCompile Include="api\AuthRoutes.cpp" />
     <ClCompile Include="api\UserRoutes.cpp" />
+    <ClCompile Include="api\FolderRoutes.cpp" />
     <ClCompile Include="api\CurrentUser.cpp" />
     <ClCompile Include="core\TelegramClient.cpp" />
     <ClCompile Include="core\Scheduler.cpp" />
