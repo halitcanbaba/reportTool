@@ -26,21 +26,44 @@ export function safeBaseName(s: string): string {
   return s.replace(/[^A-Za-z0-9_\-]+/g, '_').replace(/^_+|_+$/g, '') || 'report';
 }
 
-//--- XLSX -----------------------------------------------------------
-export async function toXlsxBlob(preview: ResultPreview, sheetName = 'Report'): Promise<Blob> {
+//--- Fetch the job's full CSV (untouched by top_n) and parse to an
+//--- aoa: [ [header...], [row0...], [row1...], ... ]. Returned cells are
+//--- raw strings; callers re-cast to numbers per column.format.
+async function fetchFullAoa(jobId: number): Promise<string[][]> {
   const XLSX = await import('xlsx');
+  const blob = await fetchCsvBlob(jobId);
+  const text = await blob.text();
+  const wb = XLSX.read(text, { type: 'string', raw: true });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  return XLSX.utils.sheet_to_json<string[]>(ws, { header: 1, defval: '', blankrows: false, raw: true }) as unknown as string[][];
+}
+
+//--- XLSX -----------------------------------------------------------
+//--- Pulls the full CSV (top_n only caps the on-screen preview), re-types
+//--- numeric cells from preview.columns metadata, writes a workbook. The
+//--- header row is replaced with the preview's column labels so the file
+//--- matches the table header users see.
+export async function toXlsxBlob(preview: ResultPreview, jobId: number, sheetName = 'Report'): Promise<Blob> {
+  const XLSX = await import('xlsx');
+  const aoaRaw = await fetchFullAoa(jobId);
   const headers = preview.columns.map(c => c.label);
-  //--- Keep numeric cells numeric so Excel formats them, but render dates as
-  //--- ISO strings (mirrors fmtDate). Text columns pass through.
   const aoa: (string | number)[][] = [headers];
-  for (const row of preview.rows) {
+  //--- Skip aoaRaw[0] (CSV header) and re-build each data row, coercing per
+  //--- column.format the same way the preview path used to.
+  for (let i = 1; i < aoaRaw.length; ++i) {
+    const src = aoaRaw[i] ?? [];
     const out: (string | number)[] = [];
     preview.columns.forEach((c, k) => {
-      const v = row[k];
-      if (v == null) { out.push(''); return; }
-      if (c.format === 'text') { out.push(String(v)); return; }
-      if (c.format === 'date') { out.push(typeof v === 'number' ? fmtDate(v) : String(v)); return; }
-      out.push(typeof v === 'number' ? v : Number(v) || 0);
+      const raw = src[k];
+      if (raw == null || raw === '') { out.push(''); return; }
+      if (c.format === 'text') { out.push(String(raw)); return; }
+      if (c.format === 'date') {
+        const n = Number(raw);
+        out.push(Number.isFinite(n) && n > 0 ? fmtDate(n) : String(raw));
+        return;
+      }
+      const n = Number(raw);
+      out.push(Number.isFinite(n) ? n : 0);
     });
     aoa.push(out);
   }
@@ -52,7 +75,7 @@ export async function toXlsxBlob(preview: ResultPreview, sheetName = 'Report'): 
 }
 
 //--- PDF ------------------------------------------------------------
-export async function toPdfBlob(preview: ResultPreview, title: string): Promise<Blob> {
+export async function toPdfBlob(preview: ResultPreview, title: string, jobId: number): Promise<Blob> {
   const [{ default: jsPDF }, autoTableMod] = await Promise.all([
     import('jspdf'),
     import('jspdf-autotable'),
@@ -66,7 +89,20 @@ export async function toPdfBlob(preview: ResultPreview, title: string): Promise<
   doc.text(title, 40, 32);
 
   const head = [preview.columns.map(c => c.label)];
-  const body = preview.rows.map(row => preview.columns.map((c, k) => fmtCell(row[k] ?? null, c.format)));
+  //--- Full data from CSV, re-formatted per column.format to match the UI.
+  const aoaRaw = await fetchFullAoa(jobId);
+  const body: string[][] = [];
+  for (let i = 1; i < aoaRaw.length; ++i) {
+    const src = aoaRaw[i] ?? [];
+    body.push(preview.columns.map((c, k) => {
+      const raw = src[k];
+      if (raw == null || raw === '') return '';
+      if (c.format === 'text') return String(raw);
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return String(raw);
+      return fmtCell(n, c.format);
+    }));
+  }
 
   autoTable(doc, {
     head,

@@ -751,6 +751,11 @@ void Engine::Run(AppContext& ctx, int64_t job_id)
    auto tpl_opt = TemplateRepo::Get(*ctx.db, job.template_id);
    if(!tpl_opt) throw std::runtime_error("template not found");
    ReportTemplate tpl = *tpl_opt;
+   //--- Soft-deleted templates remain readable so job audit history can show
+   //--- the old name, but they cannot be re-run. A ready-made tied to one
+   //--- surfaces this error in the job status.
+   if(tpl.deleted_at)
+      throw std::runtime_error("template was deleted ('" + tpl.name + "') — pick a different template");
 
    //--- Validate template before running.
    auto errs = FieldCatalog::Validate(tpl);
@@ -1184,10 +1189,15 @@ void Engine::Run(AppContext& ctx, int64_t job_id)
             });
       }
    }
-   if(top_n > 0 && rows.size() > top_n) rows.resize(top_n);
-
    //--- Write outputs ---------------------------------------------
+   //--- CSV gets the FULL sorted result set — downloads (CSV / XLSX / PDF on
+   //--- the frontend) must be complete regardless of top_n. The preview JSON
+   //--- below applies top_n for on-screen rendering.
    const std::string csv = GenericWriter::WriteCsv(tpl.columns, rows, job_dir, job_id, tpl.name);
+
+   //--- Preview JSON: top_n cap (display only) layered with the existing
+   //--- preview_max safety cap inside ToJson.
+   if(top_n > 0 && rows.size() > top_n) rows.resize(top_n);
 
    int64_t out_from = 0, out_to = 0;
    if(!date_params.empty())

@@ -3,7 +3,7 @@
 
 namespace
 {
-   constexpr int kCurrentSchemaVersion = 10;
+   constexpr int kCurrentSchemaVersion = 12;
 
    //--- Tables that survive every version (managers, regex_filters,
    //--- daily_cache, deal_cache). These are idempotent.
@@ -350,6 +350,29 @@ namespace
          return false;
       return WriteVersion(db, 10, err);
    }
+
+   //--- v10 → v11: folder hierarchy. `parent_id` is a self-referential FK that
+   //--- lets a folder live inside another folder. NULL = top-level. SET NULL
+   //--- on parent delete promotes orphans to top level (no data loss).
+   bool MigrateToV11(SqliteDb& db, std::string* err)
+   {
+      if(!db.Exec(
+         "ALTER TABLE folders ADD COLUMN parent_id INTEGER NULL REFERENCES folders(id) ON DELETE SET NULL",
+         err)) return false;
+      return WriteVersion(db, 11, err);
+   }
+
+   //--- v11 → v12: soft-delete on report_templates. `deleted_at` (UTC unix
+   //--- seconds) marks a template as gone — list endpoints filter it out, but
+   //--- the row stays so job audit history + ready-made references keep
+   //--- showing the original name as text. ReadyMade reports linked to a
+   //--- deleted template become unrunnable until the user picks a fresh one.
+   bool MigrateToV12(SqliteDb& db, std::string* err)
+   {
+      if(!db.Exec("ALTER TABLE report_templates ADD COLUMN deleted_at INTEGER NULL", err))
+         return false;
+      return WriteVersion(db, 12, err);
+   }
 }
 
 bool Schema::Apply(SqliteDb& db, std::string* err)
@@ -378,6 +401,13 @@ bool Schema::Apply(SqliteDb& db, std::string* err)
       //--- v10: richer recurrence on schedules.
       if(!db.Exec("ALTER TABLE schedules ADD COLUMN hours_json TEXT NOT NULL DEFAULT '[]'", err)) return false;
       if(!db.Exec("ALTER TABLE schedules ADD COLUMN days_of_week_json TEXT NOT NULL DEFAULT '[]'", err)) return false;
+      //--- v11: folder hierarchy.
+      if(!db.Exec(
+         "ALTER TABLE folders ADD COLUMN parent_id INTEGER NULL REFERENCES folders(id) ON DELETE SET NULL",
+         err)) return false;
+      //--- v12: soft-delete on report_templates.
+      if(!db.Exec("ALTER TABLE report_templates ADD COLUMN deleted_at INTEGER NULL", err))
+         return false;
       return WriteVersion(db, kCurrentSchemaVersion, err);
    }
    if(v < 2)
@@ -415,6 +445,14 @@ bool Schema::Apply(SqliteDb& db, std::string* err)
    if(v < 10)
    {
       if(!MigrateToV10(db, err)) return false;
+   }
+   if(v < 11)
+   {
+      if(!MigrateToV11(db, err)) return false;
+   }
+   if(v < 12)
+   {
+      if(!MigrateToV12(db, err)) return false;
    }
    //--- v >= current: no-op.
    return true;

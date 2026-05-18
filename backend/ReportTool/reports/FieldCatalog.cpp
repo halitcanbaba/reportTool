@@ -43,6 +43,27 @@ bool FieldCatalog::SourceFromName(const std::string& s, Source* out)
 
 namespace
 {
+   //--- Multi-user pivot contract -------------------------------------
+   //--- When the row's pivot bucket holds more than one user (group / city /
+   //--- country / comment / company / …), the engine merges per-user
+   //--- collections into the *_owned vectors and exposes:
+   //---   • ctx.bucket_users     — every contributing UserInfo*
+   //---   • ctx.bucket_accounts  — every contributing AccountInfo*
+   //--- Accessor rules:
+   //---   1. Iterate-and-sum/count over ctx.deals / positions / orders / daily
+   //---      → naturally correct (the merged vector already contains every
+   //---      user's rows).
+   //---   2. Picking ONE row from a merged collection (.front() / .back() /
+   //---      PickLatestAtOrBefore) → WRONG for numeric aggregation. Either
+   //---      (a) read it as a text identifier (Class A — by design returns
+   //---          one user's value), or
+   //---      (b) iterate per-login first, then aggregate. See
+   //---          DailySnapshotAt for the canonical pattern.
+   //---   3. Reading Need(ctx.user) / Need(ctx.account) for a numeric value
+   //---      bypasses bucket aggregation. Wrap in the IsAdditive check (see
+   //---      UserNum / Acc helpers) before using.
+   //-------------------------------------------------------------------
+
    //--- Throw-on-missing source helper.
    template <class T>
    inline const T& Need(const T* p, const char* what)
@@ -375,22 +396,51 @@ namespace
       return hit;
    }
 
-   //--- Daily snapshot start: latest record stamped strictly before UTC day D
-   //--- (= the previous trading day's 23:59:59 close record). D is a UTC midnight.
-   double DailyStart(const EvalContext& ctx, int64_t D, double (*sel)(const DailyRow&))
+   //--- Multi-user-aware daily snapshot: when the pivot bucket holds more than
+   //--- one user and the field is additive (money/int), pick the latest row
+   //--- ≤ target per login and SUM. Otherwise (single user, or non-additive),
+   //--- fall back to PickLatestAtOrBefore on the whole merged vector — same
+   //--- behaviour as before.
+   double DailySnapshotAt(const EvalContext& ctx, int64_t target,
+                          double (*sel)(const DailyRow&), bool additive)
    {
       const auto& v = Need(ctx.daily, "daily");
-      const DailyRow* r = PickLatestAtOrBefore(v, D - 1);
+      if(additive && ctx.bucket_users && ctx.bucket_users->size() > 1)
+      {
+         //--- For each contributing login, remember the latest row ≤ target.
+         //--- The merged vector isn't globally sorted across users, so we can't
+         //--- rely on PickLatestAtOrBefore here.
+         std::unordered_map<uint64_t, const DailyRow*> per_login;
+         per_login.reserve(ctx.bucket_users->size());
+         for(const auto& r : v)
+         {
+            if(r.datetime > target) continue;
+            auto it = per_login.find(r.login);
+            if(it == per_login.end() || r.datetime > it->second->datetime)
+               per_login[r.login] = &r;
+         }
+         double s = 0.0;
+         for(const auto& kv : per_login) if(kv.second) s += sel(*kv.second);
+         return s;
+      }
+      const DailyRow* r = PickLatestAtOrBefore(v, target);
       return r ? sel(*r) : 0.0;
+   }
+
+   //--- Daily snapshot start: latest record stamped strictly before UTC day D
+   //--- (= the previous trading day's 23:59:59 close record). D is a UTC midnight.
+   double DailyStart(const EvalContext& ctx, int64_t D, double (*sel)(const DailyRow&),
+                     bool additive = false)
+   {
+      return DailySnapshotAt(ctx, D - 1, sel, additive);
    }
 
    //--- Daily snapshot end: latest record stamped within UTC day D
    //--- (= that day's own 23:59:59 close record when present).
-   double DailyEnd(const EvalContext& ctx, int64_t D, double (*sel)(const DailyRow&))
+   double DailyEnd(const EvalContext& ctx, int64_t D, double (*sel)(const DailyRow&),
+                   bool additive = false)
    {
-      const auto& v = Need(ctx.daily, "daily");
-      const DailyRow* r = PickLatestAtOrBefore(v, D + 86400 - 1);
-      return r ? sel(*r) : 0.0;
+      return DailySnapshotAt(ctx, D + 86400 - 1, sel, additive);
    }
 
    //--- Daily-range sum: from ≤ datetime < to (to is exclusive, like deals).
@@ -721,17 +771,23 @@ namespace
    }
 
    //--- Daily snapshot start/end (category D). Registers *_start AND *_end.
+   //--- In multi-user pivot buckets, additive (money/int) fields sum each
+   //--- contributing login's latest daily row ≤ target — see DailySnapshotAt.
+   //--- Non-additive (pct) fields keep the legacy single-pick behaviour; their
+   //--- per-bucket interpretation is intentionally arbitrary.
    void DailyPair(const char* prefix, const char* label_prefix, const char* return_type,
                   double (*sel)(const DailyRow&))
    {
+      const bool additive = IsAdditive(return_type);
+
       Field s;
       s.name = std::string(prefix) + "_start";
       s.label = std::string(label_prefix) + " (start)";
       s.category = "D"; s.category_label = "Daily Snapshot Start/End";
       s.source = Source::Daily; s.arity = 1;
       s.return_type = return_type;
-      s.num = [sel](const std::vector<int64_t>& d, const Predicate*, const EvalContext& ctx) -> double {
-         return DailyStart(ctx, d[0], sel);
+      s.num = [sel, additive](const std::vector<int64_t>& d, const Predicate*, const EvalContext& ctx) -> double {
+         return DailyStart(ctx, d[0], sel, additive);
       };
       Add(std::move(s));
 
@@ -741,8 +797,8 @@ namespace
       e.category = "D"; e.category_label = "Daily Snapshot Start/End";
       e.source = Source::Daily; e.arity = 1;
       e.return_type = return_type;
-      e.num = [sel](const std::vector<int64_t>& d, const Predicate*, const EvalContext& ctx) -> double {
-         return DailyEnd(ctx, d[0], sel);
+      e.num = [sel, additive](const std::vector<int64_t>& d, const Predicate*, const EvalContext& ctx) -> double {
+         return DailyEnd(ctx, d[0], sel, additive);
       };
       Add(std::move(e));
    }

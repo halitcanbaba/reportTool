@@ -333,6 +333,12 @@ bool AccountFilterRepo::Delete(SqliteDb& db, int64_t id)
 
 namespace
 {
+   //--- SELECT column order shared by all template reads. v12 adds deleted_at
+   //--- at the tail so existing column indices don't shift.
+   const char* kTemplateSelectCols =
+      "id,name,description,row_model,date_params,columns_json,sort_json,default_top_n,"
+      "created_at,updated_at,folder_id,deleted_at";
+
    void FillTemplateFromStmt(SqliteStmt& st, ReportTemplate& t)
    {
       t.id            = st.ColI64(0);
@@ -347,6 +353,7 @@ namespace
       t.created_at    = st.ColI64(8);
       t.updated_at    = st.ColI64(9);
       t.folder_id     = st.IsNull(10) ? 0 : st.ColI64(10);
+      t.deleted_at    = st.IsNull(11) ? 0 : st.ColI64(11);
    }
 }
 
@@ -354,9 +361,12 @@ std::vector<ReportTemplate> TemplateRepo::ListAll(SqliteDb& db)
 {
    std::lock_guard<std::mutex> lock(db.Mutex());
    std::vector<ReportTemplate> out;
-   SqliteStmt st(db,
-      "SELECT id,name,description,row_model,date_params,columns_json,sort_json,default_top_n,"
-      "created_at,updated_at,folder_id FROM report_templates ORDER BY id");
+   //--- Soft-deleted rows are hidden from the catalog list but still
+   //--- resolvable via Get(id) so jobs / ready-mades that reference them keep
+   //--- rendering the template name as text.
+   const std::string sql = std::string("SELECT ") + kTemplateSelectCols +
+      " FROM report_templates WHERE deleted_at IS NULL ORDER BY id";
+   SqliteStmt st(db, sql);
    while(st.Step())
    {
       ReportTemplate t; FillTemplateFromStmt(st, t);
@@ -368,9 +378,9 @@ std::vector<ReportTemplate> TemplateRepo::ListAll(SqliteDb& db)
 std::optional<ReportTemplate> TemplateRepo::Get(SqliteDb& db, int64_t id)
 {
    std::lock_guard<std::mutex> lock(db.Mutex());
-   SqliteStmt st(db,
-      "SELECT id,name,description,row_model,date_params,columns_json,sort_json,default_top_n,"
-      "created_at,updated_at,folder_id FROM report_templates WHERE id=?");
+   const std::string sql = std::string("SELECT ") + kTemplateSelectCols +
+      " FROM report_templates WHERE id=?";
+   SqliteStmt st(db, sql);
    st.BindI64(1, id);
    if(!st.Step()) return std::nullopt;
    ReportTemplate t; FillTemplateFromStmt(st, t);
@@ -424,9 +434,16 @@ bool TemplateRepo::Update(SqliteDb& db, ReportTemplate& t)
 
 bool TemplateRepo::Delete(SqliteDb& db, int64_t id)
 {
+   //--- Soft delete: stamp deleted_at instead of removing the row. Keeps
+   //--- foreign-key targets alive for report_jobs / ready_made_reports so
+   //--- audit history + ready-made references still resolve the template
+   //--- name. ListAll filters these out; Get returns them so engine paths
+   //--- can detect and refuse.
    std::lock_guard<std::mutex> lock(db.Mutex());
-   SqliteStmt st(db, "DELETE FROM report_templates WHERE id=?");
-   st.BindI64(1, id);
+   const int64_t now = (int64_t)time(nullptr);
+   SqliteStmt st(db, "UPDATE report_templates SET deleted_at=? WHERE id=? AND deleted_at IS NULL");
+   st.BindI64(1, now);
+   st.BindI64(2, id);
    st.Step();
    return true;
 }
@@ -1372,6 +1389,11 @@ namespace
       return nullptr;
    }
 
+   //--- Folder column order, kept in one place so SELECT statements stay aligned.
+   //--- v11 adds parent_id at the tail so existing column indices don't shift.
+   const char* kFolderSelectCols =
+      "id, entity_type, name, sort_order, created_at, updated_at, parent_id";
+
    void FillFolderFromStmt(SqliteStmt& st, FolderRow& f)
    {
       f.id          = st.ColI64(0);
@@ -1380,6 +1402,7 @@ namespace
       f.sort_order  = st.ColInt(3);
       f.created_at  = st.ColI64(4);
       f.updated_at  = st.ColI64(5);
+      f.parent_id   = st.ColI64(6);   // NULL → 0 via SQLite default
    }
 }
 
@@ -1391,8 +1414,8 @@ std::vector<FolderRow> FolderRepo::ListByEntity(SqliteDb& db, const std::string&
    //--- Inline the entity table name into the COUNT subquery; entity_type is
    //--- validated upstream and the mapping is a closed set, so this is safe.
    const std::string sql = std::string(
-      "SELECT id, entity_type, name, sort_order, created_at, updated_at, "
-      "(SELECT COUNT(*) FROM ") + (tbl ? tbl : "report_templates") +
+      "SELECT ") + kFolderSelectCols + ", "
+      "(SELECT COUNT(*) FROM " + (tbl ? tbl : "report_templates") +
       " WHERE folder_id=folders.id) AS item_count "
       "FROM folders WHERE entity_type=? ORDER BY sort_order, id";
    SqliteStmt st(db, sql);
@@ -1400,7 +1423,7 @@ std::vector<FolderRow> FolderRepo::ListByEntity(SqliteDb& db, const std::string&
    while(st.Step())
    {
       FolderRow f; FillFolderFromStmt(st, f);
-      f.item_count = st.ColI64(6);
+      f.item_count = st.ColI64(7);   // one past parent_id
       out.push_back(std::move(f));
    }
    return out;
@@ -1409,9 +1432,8 @@ std::vector<FolderRow> FolderRepo::ListByEntity(SqliteDb& db, const std::string&
 std::optional<FolderRow> FolderRepo::Get(SqliteDb& db, int64_t id)
 {
    std::lock_guard<std::mutex> lock(db.Mutex());
-   SqliteStmt st(db,
-      "SELECT id, entity_type, name, sort_order, created_at, updated_at "
-      "FROM folders WHERE id=?");
+   const std::string sql = std::string("SELECT ") + kFolderSelectCols + " FROM folders WHERE id=?";
+   SqliteStmt st(db, sql);
    st.BindI64(1, id);
    if(!st.Step()) return std::nullopt;
    FolderRow f; FillFolderFromStmt(st, f);
@@ -1423,13 +1445,14 @@ int64_t FolderRepo::Insert(SqliteDb& db, FolderRow& f)
    std::lock_guard<std::mutex> lock(db.Mutex());
    const int64_t now = (int64_t)time(nullptr);
    SqliteStmt st(db,
-      "INSERT INTO folders(entity_type, name, sort_order, created_at, updated_at) "
-      "VALUES(?,?,?,?,?)");
+      "INSERT INTO folders(entity_type, name, sort_order, created_at, updated_at, parent_id) "
+      "VALUES(?,?,?,?,?,?)");
    st.BindText(1, f.entity_type);
    st.BindText(2, f.name);
    st.BindInt (3, f.sort_order);
    st.BindI64 (4, now);
    st.BindI64 (5, now);
+   if(f.parent_id) st.BindI64(6, f.parent_id); else st.BindNull(6);
    st.Step();
    f.id = db.LastInsertRowid();
    f.created_at = f.updated_at = now;
@@ -1441,11 +1464,12 @@ bool FolderRepo::Update(SqliteDb& db, FolderRow& f)
    std::lock_guard<std::mutex> lock(db.Mutex());
    const int64_t now = (int64_t)time(nullptr);
    SqliteStmt st(db,
-      "UPDATE folders SET name=?, sort_order=?, updated_at=? WHERE id=?");
+      "UPDATE folders SET name=?, sort_order=?, parent_id=?, updated_at=? WHERE id=?");
    st.BindText(1, f.name);
    st.BindInt (2, f.sort_order);
-   st.BindI64 (3, now);
-   st.BindI64 (4, f.id);
+   if(f.parent_id) st.BindI64(3, f.parent_id); else st.BindNull(3);
+   st.BindI64 (4, now);
+   st.BindI64 (5, f.id);
    st.Step();
    f.updated_at = now;
    return true;

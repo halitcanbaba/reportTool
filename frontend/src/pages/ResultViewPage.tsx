@@ -250,10 +250,10 @@ function DownloadMenu({ jobId, preview, baseName, templateName, csvUrl }: {
           triggerDownload(blob, `${baseName}.csv`);
         }
       } else if (fmt === 'xlsx') {
-        const blob = await toXlsxBlob(preview);
+        const blob = await toXlsxBlob(preview, jobId);
         triggerDownload(blob, `${baseName}.xlsx`);
       } else {
-        const blob = await toPdfBlob(preview, templateName);
+        const blob = await toPdfBlob(preview, templateName, jobId);
         triggerDownload(blob, `${baseName}.pdf`);
       }
       setOpen(false);
@@ -410,10 +410,10 @@ function SendDialog({ format, jobId, preview, baseName, templateName, range, tab
         if (format === 'csv') {
           blob = await fetchCsvBlob(jobId); filename = `${baseName}.csv`; mime = 'text/csv';
         } else if (format === 'xlsx') {
-          blob = await toXlsxBlob(preview); filename = `${baseName}.xlsx`;
+          blob = await toXlsxBlob(preview, jobId); filename = `${baseName}.xlsx`;
           mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
         } else {
-          blob = await toPdfBlob(preview, templateName); filename = `${baseName}.pdf`; mime = 'application/pdf';
+          blob = await toPdfBlob(preview, templateName, jobId); filename = `${baseName}.pdf`; mime = 'application/pdf';
         }
         if (blob.size > TG_DOCUMENT_MAX) throw new Error(`file ${(blob.size/1024/1024).toFixed(1)} MB exceeds Telegram 50 MB document cap`);
         opts = { kind: 'document', blob, filename, mime, chatId: chatId || undefined, caption: caption.slice(0, captionMax) || undefined };

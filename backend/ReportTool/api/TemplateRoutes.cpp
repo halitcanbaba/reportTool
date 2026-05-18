@@ -54,8 +54,14 @@ namespace
          j["label"]  = c.label;
          j["kind"]   = KindStr(c.kind);
          j["format"] = FmtStr(c.format);
-         if(c.kind == ColumnSpec::Kind::Identifier) j["source"] = c.source;
+         if(c.kind == ColumnSpec::Kind::Identifier)
+         {
+            j["source"]    = c.source;
+            j["pivot_key"] = c.pivot_key;
+         }
          else if(c.expr) j["expr"] = Expression::NodeToJson(*c.expr);
+         if(c.row_predicate)
+            j["row_predicate"] = Expression::PredicateToJson(*c.row_predicate);
          a.push_back(std::move(j));
       }
       return a;
@@ -65,6 +71,7 @@ namespace
    {
       if(!a.is_array()) { *err = "columns must be a JSON array"; return false; }
       out->clear();
+      bool any_explicit_pivot = false;
       for(const auto& j : a)
       {
          ColumnSpec c;
@@ -73,7 +80,14 @@ namespace
          c.kind   = KindFrom(j.value("kind", "formula"));
          c.format = FmtFrom(j.value("format", "money"));
          if(c.kind == ColumnSpec::Kind::Identifier)
+         {
             c.source = j.value("source", "");
+            if(j.contains("pivot_key") && j["pivot_key"].is_boolean())
+            {
+               c.pivot_key = j["pivot_key"].get<bool>();
+               any_explicit_pivot = any_explicit_pivot || c.pivot_key;
+            }
+         }
          else if(j.contains("expr"))
          {
             std::string e;
@@ -83,7 +97,24 @@ namespace
                return false;
             }
          }
+         if(j.contains("row_predicate") && !j["row_predicate"].is_null())
+         {
+            std::string e;
+            if(!Expression::PredicateFromJson(j["row_predicate"], &c.row_predicate, &e))
+            {
+               *err = "column '" + c.key + "' row_predicate: " + e;
+               return false;
+            }
+         }
          out->push_back(std::move(c));
+      }
+      //--- Backward-compat: legacy templates carry no pivot_key. Mark the first
+      //--- identifier as the implicit pivot so single-pivot reports keep
+      //--- working without the user re-editing.
+      if(!any_explicit_pivot)
+      {
+         for(auto& c : *out)
+            if(c.kind == ColumnSpec::Kind::Identifier) { c.pivot_key = true; break; }
       }
       return true;
    }
@@ -102,6 +133,7 @@ namespace
          { "sort",          json{ {"column_key", t.sort.column_key}, {"direction", t.sort.descending ? "desc" : "asc"} } },
          { "default_top_n", t.default_top_n },
          { "folder_id",     t.folder_id ? json(t.folder_id) : json(nullptr) },
+         { "deleted_at",    t.deleted_at ? json(t.deleted_at) : json(nullptr) },
          { "created_at",    t.created_at },
          { "updated_at",    t.updated_at },
       };

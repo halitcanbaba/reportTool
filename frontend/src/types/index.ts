@@ -76,6 +76,10 @@ export type Folder = {
   entity_type: FolderEntityType;
   name: string;
   sort_order: number;
+  //--- Folder hierarchy (v11). null = top-level. Children share the same
+  //--- entity_type as their parent. Deleting a parent promotes its children
+  //--- to top-level (ON DELETE SET NULL).
+  parent_id: number | null;
   item_count: number;
   created_at: number;
   updated_at: number;
@@ -187,6 +191,10 @@ export type Template = {
   sort: SortSpec;
   default_top_n: number;
   folder_id?: number | null;
+  //--- v12 soft-delete. Templates hidden from the list when set; the row
+  //--- still exists so referencing jobs / ready-mades can render the name.
+  //--- Engine refuses to run a deleted template.
+  deleted_at?: number | null;
   created_at: number;
   updated_at: number;
 };

@@ -4,7 +4,7 @@
 //| reusable component used by Template/Schedule/Blueprint/Ready-Made/|
 //| AccountFilter list pages.                                         |
 //+------------------------------------------------------------------+
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { DndContext, DragOverlay, useDraggable, useDroppable, PointerSensor, useSensor, useSensors,
          closestCenter, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core';
 import { FoldersAPI } from '../api/folders';
@@ -62,9 +62,20 @@ export function FolderedCard<T>(props: Props<T>) {
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 3 } }));
   const [draggingLabel, setDraggingLabel] = useState<string | null>(null);
+  //--- When a folder is being dragged, render the per-folder insertion lines
+  //--- and the root drop zone. Stays null during entity-row drags so the UI
+  //--- doesn't change for the common case.
+  const [draggingFolderId, setDraggingFolderId] = useState<number | null>(null);
 
   const onDragStart = useCallback((e: DragStartEvent) => {
     const aid = String(e.active.id);
+    if (aid.startsWith('folder-drag:')) {
+      const fid = Number(aid.slice('folder-drag:'.length));
+      const f = folders.find(ff => ff.id === fid);
+      setDraggingFolderId(fid);
+      setDraggingLabel(f ? f.name : 'Folder');
+      return;
+    }
     if (!aid.startsWith('row:')) return;
     const rowId = Number(aid.slice('row:'.length));
     const r = props.rows.find(x => props.rowKey(x) === rowId);
@@ -73,7 +84,25 @@ export function FolderedCard<T>(props: Props<T>) {
     const col = props.columns.find(c => c.searchable) ?? props.columns[0];
     const sv = col?.searchValue ? col.searchValue(r) : stringifyRender(col?.render(r, 0));
     setDraggingLabel(sv || 'Row');
-  }, [props.rows, props.rowKey, props.columns]);
+  }, [props.rows, props.rowKey, props.columns, folders]);
+
+  //--- Set of folder ids that are descendants of the currently-dragged folder.
+  //--- Used both client-side (don't highlight) and to skip the API call when
+  //--- the user drops into a forbidden target.
+  const forbiddenDropFolders = useMemo(() => {
+    if (draggingFolderId == null) return new Set<number>();
+    const desc = new Set<number>([draggingFolderId]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const f of folders) {
+        if (f.parent_id != null && desc.has(f.parent_id) && !desc.has(f.id)) {
+          desc.add(f.id); grew = true;
+        }
+      }
+    }
+    return desc;
+  }, [draggingFolderId, folders]);
 
   const reloadFolders = () =>
     FoldersAPI.list(props.entityType).then(fs => {
@@ -93,10 +122,17 @@ export function FolderedCard<T>(props: Props<T>) {
 
   useEffect(() => { reloadFolders(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [props.entityType]);
 
-  //--- Split items into top-level (no folder) + per-folder buckets. Top-level
-  //--- rows render at the top of the table with no header — they look like a
-  //--- plain list. Named folders render below as collapsible parent rows.
-  const { topLevelRows, folderGroups } = useMemo(() => {
+  //--- Build a folder tree from the flat list returned by the API. Each node
+  //--- carries its entity rows + child folder nodes (children share the parent's
+  //--- entity_type, validated server-side). Top-level rows (no folder) render
+  //--- ABOVE all folder trees in the table.
+  type FolderNode = {
+    folder: Folder;
+    rows: T[];          // post-search/sort
+    raw:  T[];          // pre-filter (used for duplicate + count)
+    children: FolderNode[];
+  };
+  const { topLevelRows, folderTree } = useMemo(() => {
     const byFolder = new Map<number | null, T[]>();
     byFolder.set(null, []);
     for (const f of folders) byFolder.set(f.id, []);
@@ -135,12 +171,28 @@ export function FolderedCard<T>(props: Props<T>) {
     };
     const unfiledAll = byFolder.get(null) ?? [];
     const top = [...unfiledAll.filter(matches)].sort(cmp);
-    const groups: { id: number; name: string; rows: T[]; raw: T[] }[] = [];
+
+    //--- Index children by parent. `folders` is already API-sorted (sort_order,id)
+    //--- so child arrays inherit that order.
+    const childrenOf = new Map<number | null, Folder[]>();
+    childrenOf.set(null, []);
     for (const f of folders) {
-      const all = byFolder.get(f.id) ?? [];
-      groups.push({ id: f.id, name: f.name, rows: [...all.filter(matches)].sort(cmp), raw: all });
+      const key = f.parent_id ?? null;
+      if (!childrenOf.has(key)) childrenOf.set(key, []);
+      childrenOf.get(key)!.push(f);
+      if (!childrenOf.has(f.id)) childrenOf.set(f.id, []);
     }
-    return { topLevelRows: top, folderGroups: groups };
+    const buildNode = (f: Folder): FolderNode => {
+      const all = byFolder.get(f.id) ?? [];
+      return {
+        folder: f,
+        rows: [...all.filter(matches)].sort(cmp),
+        raw: all,
+        children: (childrenOf.get(f.id) ?? []).map(buildNode),
+      };
+    };
+    const tree = (childrenOf.get(null) ?? []).map(buildNode);
+    return { topLevelRows: top, folderTree: tree };
   }, [folders, items, searches, sort, props]);
 
   const cycleSort = (key: string) => {
@@ -152,21 +204,62 @@ export function FolderedCard<T>(props: Props<T>) {
   };
 
   const onDragEnd = async (e: DragEndEvent) => {
+    const activeId = String(e.active.id);
+    const wasFolderDrag = activeId.startsWith('folder-drag:');
     setDraggingLabel(null);
+    setDraggingFolderId(null);
     if (!e.over) return;
     const overId = String(e.over.id);
-    const activeId = String(e.active.id);
+
+    //--- Folder repositioning ---------------------------------------
+    if (wasFolderDrag) {
+      const folderId = Number(activeId.slice('folder-drag:'.length));
+      let parent_id: number | null | undefined;
+      let before_id: number | null | undefined;
+
+      if (overId === `folder:${UNFILED}` || overId === 'folder-root') {
+        parent_id = null;
+      } else if (overId.startsWith('folder-into:')) {
+        const target = Number(overId.slice('folder-into:'.length));
+        if (forbiddenDropFolders.has(target)) return;     // cycle guard
+        if (target === folderId) return;
+        parent_id = target;
+      } else if (overId.startsWith('folder-before:')) {
+        const target = Number(overId.slice('folder-before:'.length));
+        if (target === folderId) return;
+        const targetFolder = folders.find(f => f.id === target);
+        if (!targetFolder) return;
+        if (forbiddenDropFolders.has(target)) return;
+        parent_id = targetFolder.parent_id;
+        before_id = target;
+      } else {
+        return;
+      }
+      try {
+        await FoldersAPI.moveFolder(folderId, { parent_id, before_id });
+        reloadFolders();
+      } catch (err: any) {
+        alert(err?.message ?? 'folder move failed');
+      }
+      return;
+    }
+
+    //--- Entity row move into a folder ------------------------------
     if (!activeId.startsWith('row:')) return;
     const rowId = Number(activeId.slice('row:'.length));
 
     //--- Resolve target folder from whichever droppable was hovered:
     //---   "folder:<id|unfiled>"   → that folder
+    //---   "folder-into:<id>"      → that folder (folder body, same target as entity drop)
     //---   "rowdrop:<rowKey>"      → the hovered row's current folder
     let targetFolderId: number | null = 0 as unknown as null;  // placeholder
     let targetResolved = false;
     if (overId.startsWith('folder:')) {
       const t = overId.slice('folder:'.length);
       targetFolderId = t === UNFILED ? null : Number(t);
+      targetResolved = true;
+    } else if (overId.startsWith('folder-into:')) {
+      targetFolderId = Number(overId.slice('folder-into:'.length));
       targetResolved = true;
     } else if (overId.startsWith('rowdrop:')) {
       const overRowId = Number(overId.slice('rowdrop:'.length));
@@ -273,8 +366,9 @@ export function FolderedCard<T>(props: Props<T>) {
             <tbody>
               {/* Top-level (no folder) items — no header, no indent.
                   Drop a foldered row onto a top-level row to move it out of
-                  its folder. When no top-level rows exist, an ungroup drop
-                  zone appears while dragging so unfiling stays possible. */}
+                  its folder. While ANY drag is active, surface the ungroup /
+                  root drop zone so unfile (entity) and un-nest (folder) both
+                  have a target. */}
               {topLevelRows.map((row, i) => (
                 <EntityRow<T>
                   key={'top:' + props.rowKey(row)}
@@ -288,47 +382,42 @@ export function FolderedCard<T>(props: Props<T>) {
                   topLevel
                 />
               ))}
-              {topLevelRows.length === 0 && draggingLabel != null && isAdmin && (
-                <UngroupDropRow colCount={colCount} />
+              {isAdmin && draggingLabel != null && (
+                <UngroupDropRow colCount={colCount}
+                                label={draggingFolderId != null
+                                  ? 'Drop here to move folder to top level'
+                                  : 'Drop here to remove from folder'} />
               )}
 
-              {/* Named folders — collapsible parents with indented children. */}
-              {folderGroups.map(g => {
-                const folded = !!collapsed[String(g.id)];
-                const folderObj = folders.find(f => f.id === g.id);
-                return (
-                  <FolderGroup<T>
-                    key={String(g.id)}
-                    folderId={g.id}
-                    name={g.name}
-                    count={g.raw.length}
-                    folded={folded}
-                    onToggle={() => setCollapsed(c => ({ ...c, [String(g.id)]: !folded }))}
-                    isAdmin={isAdmin}
-                    renaming={renameId === g.id}
-                    renameValue={renameValue}
-                    onStartRename={() => { setRenameId(g.id); setRenameValue(g.name); }}
-                    onRenameChange={setRenameValue}
-                    onRenameCommit={() => renameFolder(g.id)}
-                    onRenameCancel={() => setRenameId(null)}
-                    onDelete={() => deleteFolder(g.id, g.name)}
-                    onDuplicate={props.onDuplicateFolder && folderObj ? async () => {
-                      setDuplicatingId(g.id);
-                      try { await props.onDuplicateFolder!(folderObj, g.raw); reloadFolders(); }
-                      catch (err: any) { alert(err?.message ?? 'duplicate failed'); }
-                      finally { setDuplicatingId(null); }
-                    } : undefined}
-                    duplicating={duplicatingId === g.id}
-                    colCount={colCount}
-                    rows={g.rows}
-                    columns={props.columns}
-                    rowKey={props.rowKey}
-                    rowActions={props.rowActions}
-                    rowClassName={props.rowClassName}
-                    draggable={isAdmin}
-                  />
-                );
-              })}
+              {/* Folder tree — each top-level node recursively renders its
+                  subfolders and entity rows, indented per depth level. */}
+              {folderTree.map(node => (
+                <FolderSubtree<T>
+                  key={node.folder.id}
+                  node={node}
+                  depth={0}
+                  collapsed={collapsed}
+                  setCollapsed={setCollapsed}
+                  isAdmin={isAdmin}
+                  renameId={renameId}
+                  renameValue={renameValue}
+                  setRenameId={setRenameId}
+                  setRenameValue={setRenameValue}
+                  renameFolder={renameFolder}
+                  deleteFolder={deleteFolder}
+                  onDuplicateFolder={props.onDuplicateFolder}
+                  duplicatingId={duplicatingId}
+                  setDuplicatingId={setDuplicatingId}
+                  reloadFolders={reloadFolders}
+                  colCount={colCount}
+                  columns={props.columns}
+                  rowKey={props.rowKey}
+                  rowActions={props.rowActions}
+                  rowClassName={props.rowClassName}
+                  draggingFolderId={draggingFolderId}
+                  forbiddenDropFolders={forbiddenDropFolders}
+                />
+              ))}
               {items.length === 0 && (
                 <tr><td className="px-3 py-12 text-center text-ink-400" colSpan={colCount}>
                   {props.emptyText ?? 'No rows.'}
@@ -405,52 +494,94 @@ function HeaderCell<T>({ col, search, onSearchChange, sortKey, sortDir, onCycleS
   );
 }
 
-//--- One folder + its (possibly empty) child rows. Folder row is droppable;
-//--- child rows are draggable. Whole component renders <tr>s — no wrapper.
-function FolderGroup<T>({
-  folderId, name, count, folded, onToggle,
-  isAdmin, renaming, renameValue, onStartRename, onRenameChange, onRenameCommit, onRenameCancel, onDelete,
-  onDuplicate, duplicating,
-  colCount, rows, columns, rowKey, rowActions, rowClassName, draggable,
-}: {
-  folderId: number;
-  name: string;
-  count: number;
-  folded: boolean;
-  onToggle: () => void;
+//--- Recursive subtree: folder row + nested subfolders + entity rows. Each
+//--- nesting level adds left-padding to the first cell so the tree is visible.
+//--- The folder row is itself draggable (admin only) and acts as a drop target
+//--- — both for entity rows (move into folder) and for other folders (nest).
+type FolderSubtreeProps<T> = {
+  node: { folder: Folder; rows: T[]; raw: T[]; children: any[] };
+  depth: number;
+  collapsed: Record<string, boolean>;
+  setCollapsed: Dispatch<SetStateAction<Record<string, boolean>>>;
   isAdmin: boolean;
-  renaming: boolean;
+  renameId: number | null;
   renameValue: string;
-  onStartRename: () => void;
-  onRenameChange: (v: string) => void;
-  onRenameCommit: () => void;
-  onRenameCancel: () => void;
-  onDelete: () => void;
-  onDuplicate?: () => void;
-  duplicating?: boolean;
+  setRenameId: (id: number | null) => void;
+  setRenameValue: (v: string) => void;
+  renameFolder: (id: number) => void | Promise<void>;
+  deleteFolder: (id: number, name: string) => void | Promise<void>;
+  onDuplicateFolder?: (folder: Folder, rows: T[]) => Promise<void>;
+  duplicatingId: number | null;
+  setDuplicatingId: (id: number | null) => void;
+  reloadFolders: () => void;
   colCount: number;
-  rows: T[];
   columns: FolderedCol<T>[];
   rowKey: (row: T) => number;
   rowActions?: (row: T) => ReactNode;
   rowClassName?: (row: T) => string;
-  draggable: boolean;
-}) {
-  const droppableId = `folder:${folderId}`;
-  const { setNodeRef, isOver } = useDroppable({ id: droppableId });
-  const canEdit = isAdmin;
+  draggingFolderId: number | null;
+  forbiddenDropFolders: Set<number>;
+};
+function FolderSubtree<T>(p: FolderSubtreeProps<T>) {
+  const f = p.node.folder;
+  const folded = !!p.collapsed[String(f.id)];
+  const childCount = p.node.children.reduce((n: number, c: any) => n + 1 + countDescendants(c), 0);
+  const totalItems = (function totalOf(n: any): number {
+    return n.raw.length + n.children.reduce((s: number, c: any) => s + totalOf(c), 0);
+  })(p.node);
+  const renaming = p.renameId === f.id;
+  const renderingDuringFolderDrag = p.draggingFolderId != null;
+  const isSelf = p.draggingFolderId === f.id;
+  const isForbidden = p.forbiddenDropFolders.has(f.id);
+
+  //--- Draggable handle for the folder row itself (admin only).
+  const drag = useDraggable({ id: `folder-drag:${f.id}` });
+  //--- Drop target for "nest inside this folder" — reused by entity row drops too.
+  const dropInto = useDroppable({ id: `folder-into:${f.id}` });
+  //--- Insertion line above the folder (for sibling reorder). Rendered only
+  //--- while a folder drag is active to keep the layout calm otherwise.
+  const dropBefore = useDroppable({ id: `folder-before:${f.id}` });
+
+  const indentPx = 8 + p.depth * 16;
+  const dimWhileDragging = isSelf ? 'opacity-50 ' : '';
+  const intoHighlight = (renderingDuringFolderDrag && !isForbidden && dropInto.isOver)
+    ? 'ring-1 ring-ink-400 bg-ink-100/70 '
+    : (!renderingDuringFolderDrag && dropInto.isOver)
+      ? 'ring-1 ring-ink-400 bg-ink-100/70 '
+      : '';
+
+  const setRowRef = (el: HTMLTableRowElement | null) => {
+    drag.setNodeRef(el);
+    dropInto.setNodeRef(el);
+  };
 
   return (
     <>
-      <tr ref={setNodeRef}
+      {/* Insertion line — only while folder drag is active and target ≠ self */}
+      {renderingDuringFolderDrag && !isSelf && !isForbidden && (
+        <tr ref={dropBefore.setNodeRef}
+            className={
+              'h-1 ' +
+              (dropBefore.isOver ? 'bg-ink-700' : 'bg-transparent')
+            }>
+          <td colSpan={p.colCount} className="p-0 leading-none" />
+        </tr>
+      )}
+
+      {/* Folder header — draggable + droppable */}
+      <tr ref={p.isAdmin ? setRowRef : dropInto.setNodeRef}
+          {...(p.isAdmin ? drag.attributes : {})}
+          {...(p.isAdmin && !renaming ? drag.listeners : {})}
           className={
             'border-b border-ink-100 bg-ink-50 group ' +
-            (isOver ? 'ring-1 ring-ink-400 bg-ink-100/70 ' : '')
+            (p.isAdmin ? 'cursor-grab active:cursor-grabbing ' : '') +
+            dimWhileDragging + intoHighlight
           }>
-        <td colSpan={colCount} className="px-2 py-1.5">
+        <td colSpan={p.colCount} className="py-1.5" style={{ paddingLeft: indentPx, paddingRight: 8 }}>
           <div className="flex items-center gap-1.5">
             <button type="button"
-                    onClick={onToggle}
+                    onClick={() => p.setCollapsed(c => ({ ...c, [String(f.id)]: !folded }))}
+                    onPointerDown={e => e.stopPropagation()}
                     className="w-5 text-center text-ink-500 hover:text-ink-900 select-none"
                     aria-label={folded ? 'expand' : 'collapse'}>
               {folded ? '▸' : '▾'}
@@ -460,61 +591,81 @@ function FolderGroup<T>({
               <input className="input text-xs"
                      style={{ width: 220 }}
                      autoFocus
-                     value={renameValue}
-                     onChange={e => onRenameChange(e.target.value)}
+                     onPointerDown={e => e.stopPropagation()}
+                     value={p.renameValue}
+                     onChange={e => p.setRenameValue(e.target.value)}
                      onKeyDown={e => {
-                       if (e.key === 'Enter')  onRenameCommit();
-                       if (e.key === 'Escape') onRenameCancel();
+                       if (e.key === 'Enter')  p.renameFolder(f.id);
+                       if (e.key === 'Escape') p.setRenameId(null);
                      }}
-                     onBlur={() => onRenameCommit()} />
+                     onBlur={() => p.renameFolder(f.id)} />
             ) : (
               <span
-                className={'text-sm font-medium text-ink-800 ' + (canEdit ? 'cursor-text hover:underline decoration-dotted underline-offset-2' : '')}
-                onClick={canEdit ? onStartRename : undefined}
-                title={canEdit ? 'Click to rename' : undefined}>
-                {name}
+                className={'text-sm font-medium text-ink-800 ' + (p.isAdmin ? 'cursor-text hover:underline decoration-dotted underline-offset-2' : '')}
+                onPointerDown={e => e.stopPropagation()}
+                onClick={p.isAdmin ? () => { p.setRenameId(f.id); p.setRenameValue(f.name); } : undefined}
+                title={p.isAdmin ? 'Click to rename · drag to move' : undefined}>
+                {f.name}
               </span>
             )}
-            <span className="text-xs text-ink-500 ml-1">({count})</span>
-            {duplicating && (
+            <span className="text-xs text-ink-500 ml-1">
+              ({totalItems}{childCount > 0 ? ` · ${childCount} folder${childCount === 1 ? '' : 's'}` : ''})
+            </span>
+            {p.duplicatingId === f.id && (
               <span className="ml-auto text-[11px] text-ink-500 italic">duplicating…</span>
             )}
-            {canEdit && !duplicating && (
-              <span className="ml-auto inline-flex items-center gap-0.5 opacity-0 group-hover:opacity-100">
-                {onDuplicate && (
+            {p.isAdmin && p.duplicatingId !== f.id && (
+              <span className="ml-auto inline-flex items-center gap-0.5 opacity-0 group-hover:opacity-100"
+                    onPointerDown={e => e.stopPropagation()}>
+                {p.onDuplicateFolder && (
                   <button type="button"
                           className="p-1 text-ink-500 hover:text-ink-900 hover:bg-ink-200 rounded"
                           title="Duplicate folder + all items"
-                          onClick={onDuplicate}>
+                          onClick={async () => {
+                            p.setDuplicatingId(f.id);
+                            try { await p.onDuplicateFolder!(f, p.node.raw); p.reloadFolders(); }
+                            catch (err: any) { alert(err?.message ?? 'duplicate failed'); }
+                            finally { p.setDuplicatingId(null); }
+                          }}>
                     <IconDuplicate />
                   </button>
                 )}
                 <button type="button"
                         className="p-1 text-ink-400 hover:text-red-600 hover:bg-red-50 rounded text-sm leading-none"
                         title="Delete folder"
-                        onClick={onDelete}>×</button>
+                        onClick={() => p.deleteFolder(f.id, f.name)}>×</button>
               </span>
             )}
           </div>
         </td>
       </tr>
 
-      {!folded && rows.map((row, i) => (
+      {!folded && p.node.children.map((child: any) => (
+        <FolderSubtree<T> key={child.folder.id}
+                          {...p}
+                          node={child}
+                          depth={p.depth + 1} />
+      ))}
+
+      {!folded && p.node.rows.map((row: T, i: number) => (
         <EntityRow<T>
-          key={rowKey(row)}
+          key={p.rowKey(row)}
           row={row}
           idx={i}
-          rowKey={rowKey}
-          columns={columns}
-          rowActions={rowActions}
-          rowClassName={rowClassName}
-          draggable={draggable}
+          rowKey={p.rowKey}
+          columns={p.columns}
+          rowActions={p.rowActions}
+          rowClassName={p.rowClassName}
+          draggable={p.isAdmin}
+          indentPx={indentPx + 24}
         />
       ))}
-      {!folded && rows.length === 0 && (
+      {!folded && p.node.rows.length === 0 && p.node.children.length === 0 && (
         <tr>
-          <td colSpan={colCount} className="px-3 py-3 text-center text-[11px] text-ink-400 italic">
-            Drop a row here to add it.
+          <td colSpan={p.colCount}
+              className="py-3 text-[11px] text-ink-400 italic"
+              style={{ paddingLeft: indentPx + 24 }}>
+            Drop a row or folder here to add it.
           </td>
         </tr>
       )}
@@ -522,16 +673,21 @@ function FolderGroup<T>({
   );
 }
 
-//--- Drag-only target shown above the folders when no top-level rows exist,
-//--- so a user can still pull an item out of its folder. Resolves to null.
-function UngroupDropRow({ colCount }: { colCount: number }) {
+function countDescendants(node: any): number {
+  return node.children.reduce((s: number, c: any) => s + 1 + countDescendants(c), 0);
+}
+
+//--- Drop target shown above all folders during any drag. For folder drags it
+//--- moves the dragged folder to top level; for entity-row drags it unfiles
+//--- the row. Both resolve to `folder_id = null` / `parent_id = null`.
+function UngroupDropRow({ colCount, label }: { colCount: number; label: string }) {
   const { setNodeRef, isOver } = useDroppable({ id: `folder:${UNFILED}` });
   return (
     <tr ref={setNodeRef}
         className={'border-b border-dashed ' +
                    (isOver ? 'border-ink-500 bg-ink-100/70' : 'border-ink-200 bg-ink-50/40')}>
       <td colSpan={colCount} className="px-3 py-2 text-center text-[11px] text-ink-500 italic">
-        Drop here to remove from folder
+        {label}
       </td>
     </tr>
   );
@@ -541,7 +697,7 @@ function UngroupDropRow({ colCount }: { colCount: number }) {
 //--- is visually obvious. Each row is both draggable (source) and droppable
 //--- (target) — droppable so a user dropping onto a sibling row counts as a
 //--- drop on the parent folder, which makes the drag-drop hit area generous.
-function EntityRow<T>({ row, idx, rowKey, columns, rowActions, rowClassName, draggable, topLevel = false }: {
+function EntityRow<T>({ row, idx, rowKey, columns, rowActions, rowClassName, draggable, topLevel = false, indentPx }: {
   row: T;
   idx: number;
   rowKey: (row: T) => number;
@@ -549,7 +705,8 @@ function EntityRow<T>({ row, idx, rowKey, columns, rowActions, rowClassName, dra
   rowActions?: (row: T) => ReactNode;
   rowClassName?: (row: T) => string;
   draggable: boolean;
-  topLevel?: boolean;        // top-level row (no folder) renders without left indent
+  topLevel?: boolean;            // top-level row (no folder) renders without left indent
+  indentPx?: number;             // nested-folder children pass per-depth indent
 }) {
   const dragId = `row:${rowKey(row)}`;
   const dropId = `rowdrop:${rowKey(row)}`;
@@ -558,7 +715,8 @@ function EntityRow<T>({ row, idx, rowKey, columns, rowActions, rowClassName, dra
   //--- Combine ref so the same <tr> is both drag source and drop target.
   const setRef = (el: HTMLTableRowElement | null) => { setDragRef(el); setDropRef(el); };
   const extra = rowClassName ? rowClassName(row) : '';
-  const firstCellLeft = topLevel ? 'px-3' : 'pl-8 pr-3';
+  const firstCellClass = topLevel ? 'px-3' : (indentPx != null ? 'pr-3' : 'pl-8 pr-3');
+  const firstCellStyle = indentPx != null && !topLevel ? { paddingLeft: indentPx } : undefined;
   return (
     <tr ref={draggable ? setRef : setDropRef}
         {...(draggable ? attributes : {})}
@@ -570,7 +728,8 @@ function EntityRow<T>({ row, idx, rowKey, columns, rowActions, rowClassName, dra
         }>
       {columns.map((c, k) => (
         <td key={c.key}
-            className={`${k === 0 ? firstCellLeft : 'px-3'} py-2 text-${c.align ?? 'left'}`}>
+            style={k === 0 ? firstCellStyle : undefined}
+            className={`${k === 0 ? firstCellClass : 'px-3'} py-2 text-${c.align ?? 'left'}`}>
           {c.render(row, idx)}
         </td>
       ))}

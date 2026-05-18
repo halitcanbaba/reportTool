@@ -456,6 +456,7 @@ struct ReportTemplate
    int64_t                  folder_id     = 0;   // 0 = NULL = unfiled (FK -> folders.id)
    int64_t                  created_at    = 0;
    int64_t                  updated_at    = 0;
+   int64_t                  deleted_at    = 0;   // 0 = live; >0 = soft-deleted at that UTC second
 };
 
 //--- Job tracking ---------------------------------------------------
@@ -538,6 +539,7 @@ struct FolderRow
    std::string entity_type;       // "template"|"schedule"|"blueprint"|"ready_made"|"account_filter"
    std::string name;
    int         sort_order  = 0;
+   int64_t     parent_id   = 0;   // 0 = top-level; > 0 = nested under that folder (same entity_type)
    int64_t     item_count  = 0;
    int64_t     created_at  = 0;
    int64_t     updated_at  = 0;

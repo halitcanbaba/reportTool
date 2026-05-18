@@ -180,6 +180,18 @@ class Parser {
   parseFactor(): ExprNode {
     const t = this.peek();
     if (!t) throw new ParseError('unexpected end of expression', -1);
+    //--- Unary +/-: lets chips with negative literals (`-1`, `-0.5`) survive
+    //--- the chip→text→AST round-trip. `-literal` folds into a single negative
+    //--- literal so the AST stays compact; `-field()` becomes `0 - field()`.
+    if (t.kind === 'op' && (t.value === '-' || t.value === '+')) {
+      const op = t.value;
+      this.consume();
+      const operand = this.parseFactor();
+      if (op === '+') return operand;
+      if (operand.type === 'literal') return { type: 'literal', value: -operand.value };
+      return { type: 'binop', op: '-',
+               left: { type: 'literal', value: 0 }, right: operand };
+    }
     if (t.kind === 'lparen') {
       this.consume();
       const e = this.parseExpr();
