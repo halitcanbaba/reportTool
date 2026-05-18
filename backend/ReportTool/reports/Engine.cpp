@@ -118,19 +118,41 @@ namespace
       return sa < sb;
    }
 
-   //--- Pivot dimension derived from the first column's identifier source.
-   //--- `Login` keeps the old per-user loop semantics with zero-copy views.
-   enum class Pivot { Login, Group, Symbol, Ticket };
-
-   Pivot DetectPivot(const ReportTemplate& tpl)
+   //--- Pivot dispatch. Every first-column identifier drives the row dimension
+   //--- through the same generic mechanism — no per-field special cases. The
+   //--- driver split is purely about *where the key data lives*:
+   //---   • User-driver  — bucket users by a key derived from the user record
+   //---                    (login, group, name, country, comment, currency, …).
+   //---   • Deal-driver  — bucket deal/position/order records by a key on the
+   //---                    deal record itself (symbol, ticket).
+   //--- "login" is no longer a zero-copy fast path: it just yields per-user
+   //--- unique keys, so the user-driver produces one bucket per user — same
+   //--- output, owned vectors instead of views. The merge cost is negligible
+   //--- versus the upstream MT5 socket fetch.
+   struct PivotStrategy
    {
-      if(tpl.columns.empty()) return Pivot::Login;
+      enum class Driver { User, Deal };
+      Driver      driver = Driver::User;
+      std::string field_name = "login";
+   };
+
+   PivotStrategy ChoosePivot(const ReportTemplate& tpl)
+   {
+      PivotStrategy s;
+      if(tpl.columns.empty()) return s;
       const auto& c0 = tpl.columns[0];
-      if(c0.kind != ColumnSpec::Kind::Identifier) return Pivot::Login;
-      if(c0.source == "group")  return Pivot::Group;
-      if(c0.source == "symbol") return Pivot::Symbol;
-      if(c0.source == "ticket") return Pivot::Ticket;
-      return Pivot::Login;
+      if(c0.kind != ColumnSpec::Kind::Identifier) return s;
+      //--- symbol/ticket are pivot-only identifiers reading their value from
+      //--- the deal record being processed — bucket on the deal side.
+      if(c0.source == "symbol" || c0.source == "ticket")
+         return {PivotStrategy::Driver::Deal, c0.source};
+      //--- Any registered user-source identifier (txt accessor present) routes
+      //--- through the generic user-driver. Unknown sources fall back to the
+      //--- default (bucket by login) — safer than throwing.
+      const FieldCatalog::Field* f = FieldCatalog::Lookup(c0.source);
+      if(f && f->source == FieldCatalog::Source::User && f->txt)
+         return {PivotStrategy::Driver::User, c0.source};
+      return s;
    }
 
    //--- One output row's worth of pivot-bucketed inputs. Views point into
@@ -181,43 +203,9 @@ namespace
       catch(...) { return false; }
    }
 
-   std::vector<RowContext> BuildLoginContexts(
-      const std::vector<UserInfo>& users,
-      std::unordered_map<uint64_t, std::vector<DailyRow>>&        daily,
-      std::unordered_map<uint64_t, std::vector<DealRow>>&         deals,
-      std::unordered_map<uint64_t, std::vector<PositionRow>>&     positions,
-      std::unordered_map<uint64_t, std::vector<OpenOrderRow>>&    open_orders,
-      std::unordered_map<uint64_t, std::vector<HistoryOrderRow>>& history_orders,
-      std::unordered_map<uint64_t, AccountInfo>&                  accounts,
-      const Predicate*                                            row_pred)
-   {
-      std::vector<RowContext> out;
-      out.reserve(users.size());
-      for(const auto& u : users)
-      {
-         if(row_pred)
-         {
-            try { if(!FieldCatalog::EvalUserPredicate(*row_pred, u)) continue; }
-            catch(...) { continue; }
-         }
-         RowContext rc;
-         rc.pivot_text = u.group;
-         rc.pivot_num  = (double)u.login;
-         rc.user       = &u;
-         auto ait = accounts.find(u.login);
-         rc.account    = (ait != accounts.end()) ? &ait->second : nullptr;
-         auto fdaily = daily.find(u.login);          if(fdaily       != daily.end())          rc.daily_view          = &fdaily->second;
-         auto fdeal  = deals.find(u.login);          if(fdeal        != deals.end())          rc.deals_view          = &fdeal->second;
-         auto fpos   = positions.find(u.login);      if(fpos         != positions.end())      rc.positions_view      = &fpos->second;
-         auto foo    = open_orders.find(u.login);    if(foo          != open_orders.end())    rc.open_orders_view    = &foo->second;
-         auto foh    = history_orders.find(u.login); if(foh          != history_orders.end()) rc.history_orders_view = &foh->second;
-         out.push_back(std::move(rc));
-      }
-      return out;
-   }
-
    //--- Append all rows from `src` (a per-login map) onto `dst` for every
-   //--- login in `logins_in_bucket`. Used by Group pivot to merge across users.
+   //--- login in `logins_in_bucket`. Used by the user-driver to merge per-user
+   //--- collections into a per-bucket owned vector.
    template <class Row>
    void AppendForLogins(std::vector<Row>& dst,
                         const std::unordered_map<uint64_t, std::vector<Row>>& src,
@@ -231,7 +219,12 @@ namespace
       }
    }
 
-   std::vector<RowContext> BuildGroupContexts(
+   //--- Generic user-driver pivot. Buckets users by a key extracted via
+   //--- `key_field.txt(ec)` and merges every per-user collection for that key
+   //--- into the bucket's owned vectors. Subsumes the old Login + Group paths.
+   //--- The synthetic EvalContext sets both `user` and `daily` so that fields
+   //--- which depend on daily data (e.g. `currency`) can compute their key.
+   std::vector<RowContext> BuildUserKeyContexts(
       const std::vector<UserInfo>& users,
       const std::unordered_map<uint64_t, std::vector<DailyRow>>&        daily,
       const std::unordered_map<uint64_t, std::vector<DealRow>>&         deals,
@@ -239,12 +232,14 @@ namespace
       const std::unordered_map<uint64_t, std::vector<OpenOrderRow>>&    open_orders,
       const std::unordered_map<uint64_t, std::vector<HistoryOrderRow>>& history_orders,
       const std::unordered_map<uint64_t, AccountInfo>&                  accounts,
-      const Predicate*                                                  row_pred)
+      const Predicate*                                                  row_pred,
+      const FieldCatalog::Field&                                        key_field)
    {
-      //--- Stable group ordering = first-seen across `users` (post user-filter).
-      std::vector<std::string> group_order;
-      std::unordered_map<std::string, std::vector<uint64_t>> by_group;
+      //--- Stable bucket ordering = first-seen across `users` (post user-filter).
+      std::vector<std::string>                               order;
+      std::unordered_map<std::string, std::vector<uint64_t>> by_key;
       std::unordered_map<std::string, const UserInfo*>       first_user;
+
       for(const auto& u : users)
       {
          if(row_pred)
@@ -252,29 +247,58 @@ namespace
             try { if(!FieldCatalog::EvalUserPredicate(*row_pred, u)) continue; }
             catch(...) { continue; }
          }
-         auto& bucket = by_group[u.group];
+         //--- Compute the bucket key by invoking the field's text accessor on
+         //--- a per-user synthetic context. Failures (e.g. daily-dependent
+         //--- fields with no daily data) bucket the user under "" — same
+         //--- collapse semantics as an empty group string.
+         std::string key;
+         try
+         {
+            EvalContext ec;
+            ec.user = &u;
+            auto dit = daily.find(u.login);
+            ec.daily = (dit != daily.end()) ? &dit->second : nullptr;
+            key = key_field.txt(ec);
+         }
+         catch(...) { key.clear(); }
+
+         auto& bucket = by_key[key];
          if(bucket.empty())
          {
-            group_order.push_back(u.group);
-            first_user[u.group] = &u;
+            order.push_back(key);
+            first_user[key] = &u;
          }
          bucket.push_back(u.login);
       }
 
       std::vector<RowContext> out;
-      out.reserve(group_order.size());
-      for(const auto& g : group_order)
+      out.reserve(order.size());
+      for(const auto& k : order)
       {
          RowContext rc;
-         rc.pivot_text = g;
+         rc.pivot_text = k;
          rc.pivot_num  = 0.0;
-         rc.user       = first_user[g];
+         rc.user       = first_user[k];
+         if(rc.user && key_field.num)
+         {
+            //--- Numeric identifiers (e.g. login) — surface the numeric value
+            //--- for any downstream consumer that reads pivot_key_num.
+            try
+            {
+               EvalContext ec;
+               ec.user = rc.user;
+               auto dit = daily.find(rc.user->login);
+               ec.daily = (dit != daily.end()) ? &dit->second : nullptr;
+               rc.pivot_num = key_field.num({}, nullptr, ec);
+            }
+            catch(...) { rc.pivot_num = 0.0; }
+         }
          if(rc.user)
          {
             auto ait = accounts.find(rc.user->login);
             rc.account = (ait != accounts.end()) ? &ait->second : nullptr;
          }
-         const auto& logins_in_bucket = by_group[g];
+         const auto& logins_in_bucket = by_key[k];
          AppendForLogins(rc.daily_owned,          daily,          logins_in_bucket);
          AppendForLogins(rc.deals_owned,          deals,          logins_in_bucket);
          AppendForLogins(rc.positions_owned,      positions,      logins_in_bucket);
@@ -671,30 +695,41 @@ void Engine::Run(AppContext& ctx, int64_t job_id)
    JobRepo::UpdateStatus(*ctx.db, job_id, JobStatus::Running, 0.80);
 
    //--- Pivot-aware row generation --------------------------------
-   //--- First-column identifier source (login|group|symbol|ticket) decides
-   //--- the row dimension. Its optional `row_predicate` (set in the designer's
-   //--- "Filter rows" panel) is applied at bucket time so rejected rows never
-   //--- appear in the output. Login is the zero-copy fast path; the other
-   //--- three bucket data slices accordingly. See helpers above.
-   const Pivot pivot = DetectPivot(tpl);
+   //--- Whatever identifier sits in the first column drives the row dimension.
+   //--- ChoosePivot routes user-source identifiers (login, group, country,
+   //--- comment, currency, status, …) through the generic user-key builder, and
+   //--- routes symbol/ticket through their deal-driven builders. The optional
+   //--- row_predicate (designer's "Filter rows" panel) narrows the upstream
+   //--- collection (users for user-driver, deals for deal-driver).
+   const PivotStrategy strategy = ChoosePivot(tpl);
    const Predicate* row_pred = (!tpl.columns.empty() && tpl.columns[0].row_predicate)
                                   ? tpl.columns[0].row_predicate.get()
                                   : nullptr;
 
    std::vector<RowContext> contexts;
-   switch(pivot)
+   switch(strategy.driver)
    {
-      case Pivot::Login:
-         contexts = BuildLoginContexts(users, daily, deals, positions, open_orders, history_orders, accounts, row_pred);
+      case PivotStrategy::Driver::User:
+      {
+         const FieldCatalog::Field* f = FieldCatalog::Lookup(strategy.field_name);
+         //--- ChoosePivot guarantees a user-source field with a txt accessor,
+         //--- but guard defensively against catalog/Template drift.
+         if(!f || !f->txt)
+         {
+            const FieldCatalog::Field* lf = FieldCatalog::Lookup("login");
+            if(!lf) throw std::runtime_error("FieldCatalog: 'login' missing");
+            f = lf;
+         }
+         contexts = BuildUserKeyContexts(users, daily, deals, positions,
+                                         open_orders, history_orders, accounts,
+                                         row_pred, *f);
          break;
-      case Pivot::Group:
-         contexts = BuildGroupContexts(users, daily, deals, positions, open_orders, history_orders, accounts, row_pred);
-         break;
-      case Pivot::Symbol:
-         contexts = BuildSymbolContexts(deals, positions, open_orders, history_orders, row_pred);
-         break;
-      case Pivot::Ticket:
-         contexts = BuildTicketContexts(users, deals, accounts, row_pred);
+      }
+      case PivotStrategy::Driver::Deal:
+         if(strategy.field_name == "symbol")
+            contexts = BuildSymbolContexts(deals, positions, open_orders, history_orders, row_pred);
+         else  // "ticket"
+            contexts = BuildTicketContexts(users, deals, accounts, row_pred);
          break;
    }
 

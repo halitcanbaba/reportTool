@@ -50,8 +50,12 @@ namespace
          if(!j.contains("expr") || j["expr"].is_null())
          { *err = "expr is required"; return false; }
          if(!Expression::NodeFromJson(j["expr"], &b->expr, err)) return false;
-         b->folder_id = (j.contains("folder_id") && j["folder_id"].is_number_integer())
-            ? j["folder_id"].get<int64_t>() : 0;
+         //--- PATCH semantics: missing key leaves the existing folder_id intact.
+         if(j.contains("folder_id"))
+         {
+            if(j["folder_id"].is_null())                  b->folder_id = 0;
+            else if(j["folder_id"].is_number_integer())   b->folder_id = j["folder_id"].get<int64_t>();
+         }
       }
       catch(const std::exception& e) { *err = e.what(); return false; }
       return true;

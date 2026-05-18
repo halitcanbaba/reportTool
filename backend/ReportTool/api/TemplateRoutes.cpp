@@ -128,11 +128,13 @@ namespace
             t->sort.descending = j["sort"].value("direction", std::string("desc")) != "asc";
          }
          t->default_top_n = j.value("default_top_n", 0u);
-         //--- folder_id is optional; null or absent leaves it 0 (Unfiled).
-         if(j.contains("folder_id") && j["folder_id"].is_number_integer())
-            t->folder_id = j["folder_id"].get<int64_t>();
-         else
-            t->folder_id = 0;
+         //--- PATCH semantics: missing key leaves the existing folder_id intact;
+         //--- explicit null clears, integer sets. For POST, *t defaults to 0.
+         if(j.contains("folder_id"))
+         {
+            if(j["folder_id"].is_null())                  t->folder_id = 0;
+            else if(j["folder_id"].is_number_integer())   t->folder_id = j["folder_id"].get<int64_t>();
+         }
       }
       catch(const std::exception& e) { *err = e.what(); return false; }
       return true;

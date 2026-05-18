@@ -62,8 +62,12 @@ namespace
          r->relative_preset = j.value("relative_preset", std::string("last_n_days"));
          r->relative_n      = j.value("relative_n",      7);
          r->top_n_override  = j.value("top_n_override",  0u);
-         r->folder_id = (j.contains("folder_id") && j["folder_id"].is_number_integer())
-            ? j["folder_id"].get<int64_t>() : 0;
+         //--- PATCH semantics: missing key leaves the existing folder_id intact.
+         if(j.contains("folder_id"))
+         {
+            if(j["folder_id"].is_null())                  r->folder_id = 0;
+            else if(j["folder_id"].is_number_integer())   r->folder_id = j["folder_id"].get<int64_t>();
+         }
       }
       catch(const std::exception& e) { *err = e.what(); return false; }
       return true;

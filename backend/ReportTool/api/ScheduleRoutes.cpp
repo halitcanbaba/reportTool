@@ -68,8 +68,14 @@ namespace
          if(s->delivery_format != "csv" && s->delivery_format != "text")
             { *err = "delivery_format must be 'csv' or 'text'"; return false; }
          s->enabled          = j.value("enabled",          true);
-         s->folder_id = (j.contains("folder_id") && j["folder_id"].is_number_integer())
-            ? j["folder_id"].get<int64_t>() : 0;
+         //--- Preserve current folder_id when the key is absent (PATCH semantics).
+         //--- Explicit null clears the folder; integer sets it. Caller seeds *s
+         //--- with current row for PATCH; for POST the field defaults to 0.
+         if(j.contains("folder_id"))
+         {
+            if(j["folder_id"].is_null())                  s->folder_id = 0;
+            else if(j["folder_id"].is_number_integer())   s->folder_id = j["folder_id"].get<int64_t>();
+         }
          //--- Helper: parse, clamp, dedupe an int array from JSON.
          auto readIntList = [&](const char* key, int lo, int hi) -> std::vector<int> {
             std::vector<int> out;

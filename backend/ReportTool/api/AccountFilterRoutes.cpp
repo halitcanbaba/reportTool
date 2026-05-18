@@ -61,8 +61,12 @@ namespace
             if(!Expression::PredicateFromJson(j["user_predicate"], &f->user_predicate, err))
                return false;
          }
-         f->folder_id = (j.contains("folder_id") && j["folder_id"].is_number_integer())
-            ? j["folder_id"].get<int64_t>() : 0;
+         //--- PATCH semantics: missing key leaves the existing folder_id intact.
+         if(j.contains("folder_id"))
+         {
+            if(j["folder_id"].is_null())                  f->folder_id = 0;
+            else if(j["folder_id"].is_number_integer())   f->folder_id = j["folder_id"].get<int64_t>();
+         }
       }
       catch(const std::exception& e) { *err = e.what(); return false; }
       return true;
