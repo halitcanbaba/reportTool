@@ -13,26 +13,12 @@ import { FieldPicker } from '../components/FieldPicker';
 import { PredicateEditor } from '../components/PredicateEditor';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 
-//--- Pivot dimensions auto-detected from the first column's identifier source.
-//--- Must mirror Engine.cpp::DetectPivot so the UI badge matches engine reality.
-type PivotKind = 'login' | 'group' | 'symbol' | 'ticket';
-const PIVOT_SOURCES: Record<string, PivotKind> = {
-  login: 'login', group: 'group', symbol: 'symbol', ticket: 'ticket',
-};
-//--- Which catalog source the row predicate's fields are picked from.
-const PIVOT_PRED_SOURCE: Record<PivotKind, 'user' | 'deal'> = {
-  login: 'user', group: 'user', symbol: 'deal', ticket: 'deal',
-};
-
-//--- Resolve the pivot label for the first column. For non-identifier or
-//--- unrecognized identifier sources, the engine still defaults to Login
-//--- pivot — we surface that explicitly so users aren't confused.
-function pivotInfo(col: Column | undefined): { kind: PivotKind; explicit: boolean } {
-  if(col && col.kind === 'identifier' && col.source) {
-    const k = PIVOT_SOURCES[col.source];
-    if(k) return { kind: k, explicit: true };
-  }
-  return { kind: 'login', explicit: false };
+//--- Predicate target for a pivot identifier — mirrors Engine.cpp's
+//--- driver split. symbol/ticket live on deal records; everything else
+//--- (login, group, name, country, comment, currency, …) is user-source.
+function predicateSourceFor(source: string | undefined): 'user' | 'deal' {
+  if (source === 'symbol' || source === 'ticket') return 'deal';
+  return 'user';
 }
 
 function countPredicate(p: Predicate | null | undefined): number {
@@ -91,7 +77,8 @@ export function TemplateDesignerPage() {
   const [dpRaw, setDpRaw] = useState('date_from, date_to');
 
   const [dragLabel, setDragLabel] = useState<string | null>(null);
-  const [rowFilterOpen, setRowFilterOpen] = useState(false);
+  //--- Per-column "Filter rows" panel open state (column index → open).
+  const [rowFilterOpen, setRowFilterOpen] = useState<Record<number, boolean>>({});
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
   useEffect(() => {
@@ -101,9 +88,18 @@ export function TemplateDesignerPage() {
   useEffect(() => {
     if (!editing) return;
     TemplatesAPI.get(Number(id)).then((t: Template) => {
+      //--- Backward-compat: if no column has pivot_key explicitly true, the
+      //--- legacy "first identifier is the pivot" rule applies. Mirrors the
+      //--- backend's ColumnFromJson fallback in Expression.cpp.
+      const anyExplicitPivot = t.columns.some(c => c.pivot_key === true);
+      const cols = anyExplicitPivot ? t.columns : t.columns.map((c, i) => {
+        if (c.kind !== 'identifier') return c;
+        const firstIdent = t.columns.findIndex(cc => cc.kind === 'identifier');
+        return { ...c, pivot_key: i === firstIdent };
+      });
       setTpl({
         name: t.name, description: t.description, row_model: t.row_model,
-        date_params: t.date_params, columns: t.columns, sort: t.sort,
+        date_params: t.date_params, columns: cols, sort: t.sort,
         default_top_n: t.default_top_n,
       });
       setDpRaw(t.date_params.join(', '));
@@ -160,16 +156,23 @@ export function TemplateDesignerPage() {
   };
 
   const addIdentifierColumn = () => {
-    setTpl(prev => ({
-      ...prev,
-      columns: [...prev.columns, {
-        key: uniqueKey('col_', prev.columns),
-        label: 'New column',
-        kind: 'identifier',
-        format: 'text',
-        source: 'login',
-      }],
-    }));
+    setTpl(prev => {
+      //--- First identifier in the template defaults to pivot_key=true so the
+      //--- single-pivot case stays the no-config path. Subsequent identifiers
+      //--- default to display-only; the user opts in by toggling.
+      const hasPivot = prev.columns.some(c => c.kind === 'identifier' && c.pivot_key === true);
+      return {
+        ...prev,
+        columns: [...prev.columns, {
+          key: uniqueKey('col_', prev.columns),
+          label: 'New column',
+          kind: 'identifier',
+          format: 'text',
+          source: 'login',
+          pivot_key: !hasPivot,
+        }],
+      };
+    });
     setChipsByIdx(prev => [...prev, []]);
     setErrByIdx (prev => [...prev, null]);
   };
@@ -327,24 +330,32 @@ export function TemplateDesignerPage() {
 
           <ul className="space-y-3">
             {tpl.columns.map((c, idx) => {
-              const isPivotRow = idx === 0;
-              const pivot     = isPivotRow ? pivotInfo(c) : null;
+              const isPivot   = c.kind === 'identifier' && c.pivot_key === true;
+              //--- Rank among pivot-keyed columns ("Index 1", "Index 2", …).
+              const pivotRank = isPivot
+                ? tpl.columns.slice(0, idx + 1).filter(cc => cc.kind === 'identifier' && cc.pivot_key === true).length
+                : 0;
               const predCount = countPredicate(c.row_predicate);
+              const predSrc   = predicateSourceFor(c.source);
               //--- Quiet ink accent (matches the rest of the app palette):
               //--- a 2px darker left edge + a small grey label. No coloured
               //--- banner; no overflow clipping for inner dropdowns.
-              const liClass = isPivotRow
+              const liClass = isPivot
                 ? 'border border-ink-200 border-l-2 border-l-ink-700 rounded p-3 bg-ink-100/50'
                 : 'border border-ink-200 rounded p-3 bg-ink-50/40';
               return (
               <li key={idx} className={liClass}>
-                {pivot && (
+                {isPivot && (
                   <div className="text-[10px] uppercase tracking-wide text-ink-500 mb-2 flex items-center gap-1.5">
-                    <span className="font-medium">Pivot</span>
+                    <span className="font-medium">Index {pivotRank}</span>
                     <span className="text-ink-300">·</span>
-                    <span className="font-mono font-semibold text-ink-800">{pivot.kind}</span>
-                    {!pivot.explicit && <span className="opacity-60 normal-case italic">(default)</span>}
+                    <span className="font-mono font-semibold text-ink-800">{c.source || '—'}</span>
                     <span className="ml-auto opacity-50 normal-case">rows grouped by this column</span>
+                  </div>
+                )}
+                {c.kind === 'identifier' && !isPivot && (
+                  <div className="text-[10px] uppercase tracking-wide text-ink-400 mb-2">
+                    Display column
                   </div>
                 )}
                 <div className="flex items-center gap-3 mb-3">
@@ -390,31 +401,37 @@ export function TemplateDesignerPage() {
                         placeholder="change…"
                         onPick={f => updateColumn(idx, { source: f.name })}
                       />
-                      {pivot && (
+                      <label className="ml-auto inline-flex items-center gap-1.5 text-xs cursor-pointer select-none"
+                             title="When on, this column contributes to the row bucket key">
+                        <input type="checkbox"
+                               checked={isPivot}
+                               onChange={e => updateColumn(idx, { pivot_key: e.target.checked })} />
+                        <span className="font-medium text-ink-700">Pivot</span>
+                      </label>
+                      {isPivot && (
                         <button type="button"
                                 className={
-                                  'text-xs px-2 py-1 rounded border font-medium ml-auto ' +
+                                  'text-xs px-2 py-1 rounded border font-medium ' +
                                   (predCount > 0
                                     ? 'bg-ink-100 border-ink-400 text-ink-900 hover:bg-ink-200'
                                     : 'bg-white border-ink-300 text-ink-700 hover:bg-ink-50')
                                 }
-                                title={`Filter which ${pivot.kind} rows appear (applied before aggregation)`}
-                                onClick={() => setRowFilterOpen(o => !o)}>
+                                title={`Filter which ${c.source || 'rows'} appear (applied before aggregation)`}
+                                onClick={() => setRowFilterOpen(o => ({ ...o, [idx]: !o[idx] }))}>
                           {predCount > 0
-                            ? `${rowFilterOpen ? '▾' : '▸'} Filter rows · ${predCount}`
-                            : `${rowFilterOpen ? '▾' : '▸'} + Filter rows`}
+                            ? `${rowFilterOpen[idx] ? '▾' : '▸'} Filter rows · ${predCount}`
+                            : `${rowFilterOpen[idx] ? '▾' : '▸'} + Filter rows`}
                         </button>
                       )}
                     </div>
-                    {pivot && rowFilterOpen && catalog && (
+                    {isPivot && rowFilterOpen[idx] && catalog && (
                       <div className="border border-ink-200 bg-white rounded p-3">
                         <div className="text-[11px] text-ink-500 mb-2">
-                          Only {pivot.kind}s whose rows match this predicate are produced.
-                          {' '}Fields drawn from <code className="font-mono">{PIVOT_PRED_SOURCE[pivot.kind]}</code> source.
+                          Only rows whose <code className="font-mono">{predSrc}</code> data matches this predicate are produced.
                         </div>
                         <PredicateEditor
-                          source={PIVOT_PRED_SOURCE[pivot.kind]}
-                          filterable={catalog.filterable_by_source?.[PIVOT_PRED_SOURCE[pivot.kind]] ?? []}
+                          source={predSrc}
+                          filterable={catalog.filterable_by_source?.[predSrc] ?? []}
                           predicate={c.row_predicate ?? null}
                           onChange={(p) => updateColumn(idx, { row_predicate: p })}
                         />

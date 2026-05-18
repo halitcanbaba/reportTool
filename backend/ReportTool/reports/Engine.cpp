@@ -132,36 +132,63 @@ namespace
    struct PivotStrategy
    {
       enum class Driver { User, Deal };
-      Driver      driver = Driver::User;
+      Driver      driver     = Driver::User;
       std::string field_name = "login";
+      size_t      col_index  = 0;       // position in tpl.columns — used for per-cell rendering
    };
 
-   PivotStrategy ChoosePivot(const ReportTemplate& tpl)
+   //--- Resolve which identifier columns drive the row dimension. Returns a
+   //--- list in column order — every column with `kind==Identifier && pivot_key`
+   //--- is appended. Falls back to `[login]` if the template carries no pivot
+   //--- flag (degenerate case; the JSON parser already backfills the legacy
+   //--- "first identifier" implicit pivot, so this fallback only fires for
+   //--- templates with zero identifier columns).
+   std::vector<PivotStrategy> ChoosePivots(const ReportTemplate& tpl)
    {
-      PivotStrategy s;
-      if(tpl.columns.empty()) return s;
-      const auto& c0 = tpl.columns[0];
-      if(c0.kind != ColumnSpec::Kind::Identifier) return s;
-      //--- symbol/ticket are pivot-only identifiers reading their value from
-      //--- the deal record being processed — bucket on the deal side.
-      if(c0.source == "symbol" || c0.source == "ticket")
-         return {PivotStrategy::Driver::Deal, c0.source};
-      //--- Any registered user-source identifier (txt accessor present) routes
-      //--- through the generic user-driver. Unknown sources fall back to the
-      //--- default (bucket by login) — safer than throwing.
-      const FieldCatalog::Field* f = FieldCatalog::Lookup(c0.source);
-      if(f && f->source == FieldCatalog::Source::User && f->txt)
-         return {PivotStrategy::Driver::User, c0.source};
-      return s;
+      std::vector<PivotStrategy> out;
+      for(size_t i = 0; i < tpl.columns.size(); ++i)
+      {
+         const auto& c = tpl.columns[i];
+         if(c.kind != ColumnSpec::Kind::Identifier) continue;
+         if(!c.pivot_key) continue;
+         PivotStrategy s;
+         s.col_index  = i;
+         s.field_name = c.source;
+         if(c.source == "symbol" || c.source == "ticket")
+            s.driver = PivotStrategy::Driver::Deal;
+         else
+         {
+            const FieldCatalog::Field* f = FieldCatalog::Lookup(c.source);
+            if(f && f->source == FieldCatalog::Source::User && f->txt)
+               s.driver = PivotStrategy::Driver::User;
+            else
+               continue;   // unknown source — skip silently
+         }
+         out.push_back(std::move(s));
+      }
+      if(out.empty())
+      {
+         PivotStrategy s;
+         s.driver = PivotStrategy::Driver::User;
+         s.field_name = "login";
+         s.col_index  = 0;
+         out.push_back(std::move(s));
+      }
+      return out;
    }
 
    //--- One output row's worth of pivot-bucketed inputs. Views point into
    //--- shared maps when we can (Login fast path); owned vectors hold the
-   //--- merged/filtered slice otherwise.
+   //--- merged/filtered slice otherwise. `pivot_parts` carries one (text, num)
+   //--- pair per pivot strategy, indexed by strategy order — set by builders
+   //--- and consumed by the row-render loop to swap ec.pivot_key_text/num
+   //--- when evaluating each pivot identifier cell (matters for symbol/ticket
+   //--- which read those fields rather than ec.user).
    struct RowContext
    {
       std::string pivot_text;
       double      pivot_num = 0.0;
+      std::vector<std::pair<std::string, double>> pivot_parts;
       const UserInfo*    user    = nullptr;
       const AccountInfo* account = nullptr;
       const std::vector<DailyRow>*          daily_view          = nullptr;
@@ -174,6 +201,11 @@ namespace
       std::vector<PositionRow>       positions_owned;
       std::vector<OpenOrderRow>      open_orders_owned;
       std::vector<HistoryOrderRow>   history_orders_owned;
+      //--- All users + accounts contributing to this bucket. Pivots that
+      //--- merge users (group / country / city / comment / …) populate both
+      //--- so Cat B (UserNum) / Cat C (Acc) accessors can sum across them.
+      std::vector<const UserInfo*>    bucket_users;
+      std::vector<const AccountInfo*> bucket_accounts;
    };
 
    //--- Apply a user-source predicate to narrow the user list. Falls through
@@ -236,9 +268,10 @@ namespace
       const FieldCatalog::Field&                                        key_field)
    {
       //--- Stable bucket ordering = first-seen across `users` (post user-filter).
-      std::vector<std::string>                               order;
-      std::unordered_map<std::string, std::vector<uint64_t>> by_key;
-      std::unordered_map<std::string, const UserInfo*>       first_user;
+      std::vector<std::string>                                            order;
+      std::unordered_map<std::string, std::vector<uint64_t>>              by_key;
+      std::unordered_map<std::string, const UserInfo*>                    first_user;
+      std::unordered_map<std::string, std::vector<const UserInfo*>>       bucket_user_ptrs;
 
       for(const auto& u : users)
       {
@@ -269,6 +302,7 @@ namespace
             first_user[key] = &u;
          }
          bucket.push_back(u.login);
+         bucket_user_ptrs[key].push_back(&u);
       }
 
       std::vector<RowContext> out;
@@ -304,6 +338,14 @@ namespace
          AppendForLogins(rc.positions_owned,      positions,      logins_in_bucket);
          AppendForLogins(rc.open_orders_owned,    open_orders,    logins_in_bucket);
          AppendForLogins(rc.history_orders_owned, history_orders, logins_in_bucket);
+         rc.bucket_users = bucket_user_ptrs[k];
+         rc.bucket_accounts.reserve(rc.bucket_users.size());
+         for(const auto* up : rc.bucket_users)
+         {
+            auto ait = accounts.find(up->login);
+            rc.bucket_accounts.push_back(ait != accounts.end() ? &ait->second : nullptr);
+         }
+         rc.pivot_parts.push_back({rc.pivot_text, rc.pivot_num});
          out.push_back(std::move(rc));
       }
       return out;
@@ -368,7 +410,12 @@ namespace
 
       std::vector<RowContext> out;
       out.reserve(order.size());
-      for(const auto& s : order) out.push_back(std::move(by_sym[s]));
+      for(const auto& s : order)
+      {
+         RowContext rc = std::move(by_sym[s]);
+         rc.pivot_parts.push_back({rc.pivot_text, rc.pivot_num});
+         out.push_back(std::move(rc));
+      }
       return out;
    }
 
@@ -399,8 +446,292 @@ namespace
             rc.user    = (uit != user_by_login.end()) ? uit->second : nullptr;
             rc.account = (ait != accounts.end())      ? &ait->second : nullptr;
             rc.deals_owned.push_back(d);
+            if(rc.user)    rc.bucket_users.push_back(rc.user);
+            if(rc.account) rc.bucket_accounts.push_back(rc.account);
+            rc.pivot_parts.push_back({rc.pivot_text, rc.pivot_num});
             out.push_back(std::move(rc));
          }
+      }
+      return out;
+   }
+
+   //--- Composite-pivot builder. Handles every case with ≥2 pivot keys plus
+   //--- single mixed/deal cases not covered by the specialised single-key
+   //--- builders. Each bucket's key is the tuple of values in strategy order
+   //--- (strategies are already in template column order). pivot_parts is
+   //--- populated in the same strategy order for downstream cell rendering.
+   //---
+   //--- Semantics per driver mix:
+   //---   • All-user-driver  → bucket users by composite user-field tuple;
+   //---                        merge per-user collections via AppendForLogins.
+   //---   • Mixed / all-deal → iterate user → deals; bucket each deal by
+   //---                        (user_parts ++ deal_parts). Positions/orders
+   //---                        attach to existing buckets when their symbol
+   //---                        matches; never seed new buckets. If any deal
+   //---                        strategy is "ticket", positions/orders are not
+   //---                        attached at all (no ticket mapping across
+   //---                        deal/position/order records).
+   std::vector<RowContext> BuildMultiPivotContexts(
+      const std::vector<UserInfo>& users,
+      const std::unordered_map<uint64_t, std::vector<DailyRow>>&        daily,
+      const std::unordered_map<uint64_t, std::vector<DealRow>>&         deals,
+      const std::unordered_map<uint64_t, std::vector<PositionRow>>&     positions,
+      const std::unordered_map<uint64_t, std::vector<OpenOrderRow>>&    open_orders,
+      const std::unordered_map<uint64_t, std::vector<HistoryOrderRow>>& history_orders,
+      const std::unordered_map<uint64_t, AccountInfo>&                  accounts,
+      const std::vector<PivotStrategy>&                                 strategies,
+      const std::vector<const Predicate*>&                              predicates)
+   {
+      std::vector<size_t> user_idx, deal_idx;
+      for(size_t i = 0; i < strategies.size(); ++i)
+      {
+         if(strategies[i].driver == PivotStrategy::Driver::User) user_idx.push_back(i);
+         else                                                    deal_idx.push_back(i);
+      }
+      std::vector<const FieldCatalog::Field*> user_fields(user_idx.size(), nullptr);
+      for(size_t i = 0; i < user_idx.size(); ++i)
+      {
+         user_fields[i] = FieldCatalog::Lookup(strategies[user_idx[i]].field_name);
+         if(!user_fields[i] || !user_fields[i]->txt)
+            throw std::runtime_error("multi-pivot: user field '" + strategies[user_idx[i]].field_name + "' missing");
+      }
+      bool has_ticket = false;
+      for(auto i : deal_idx) if(strategies[i].field_name == "ticket") has_ticket = true;
+
+      const char SEP = '\x1F';
+      auto compose_key = [&](const std::vector<std::pair<std::string,double>>& parts) {
+         std::string s;
+         for(size_t i = 0; i < parts.size(); ++i)
+         {
+            if(i) s.push_back(SEP);
+            s += parts[i].first;
+         }
+         return s;
+      };
+
+      auto deal_parts_from_deal = [&](const DealRow& d) {
+         std::vector<std::pair<std::string,double>> parts(deal_idx.size());
+         for(size_t i = 0; i < deal_idx.size(); ++i)
+         {
+            const auto& n = strategies[deal_idx[i]].field_name;
+            if(n == "symbol")      parts[i] = {d.symbol,             0.0};
+            else if(n == "ticket") parts[i] = {std::to_string(d.ticket), (double)d.ticket};
+         }
+         return parts;
+      };
+      auto deal_parts_from_position = [&](const PositionRow& p) {
+         std::vector<std::pair<std::string,double>> parts(deal_idx.size());
+         for(size_t i = 0; i < deal_idx.size(); ++i)
+         {
+            const auto& n = strategies[deal_idx[i]].field_name;
+            if(n == "symbol") parts[i] = {p.symbol, 0.0};
+            //--- ticket on PositionRow is not comparable to a deal ticket; the
+            //--- has_ticket short-circuit above prevents this path.
+         }
+         return parts;
+      };
+      auto deal_parts_from_open_order = [&](const OpenOrderRow& o) {
+         std::vector<std::pair<std::string,double>> parts(deal_idx.size());
+         for(size_t i = 0; i < deal_idx.size(); ++i)
+         {
+            const auto& n = strategies[deal_idx[i]].field_name;
+            if(n == "symbol") parts[i] = {o.symbol, 0.0};
+         }
+         return parts;
+      };
+      auto deal_parts_from_history_order = [&](const HistoryOrderRow& o) {
+         std::vector<std::pair<std::string,double>> parts(deal_idx.size());
+         for(size_t i = 0; i < deal_idx.size(); ++i)
+         {
+            const auto& n = strategies[deal_idx[i]].field_name;
+            if(n == "symbol") parts[i] = {o.symbol, 0.0};
+         }
+         return parts;
+      };
+
+      struct Acc
+      {
+         std::vector<std::pair<std::string,double>> parts;
+         const UserInfo*    user    = nullptr;
+         const AccountInfo* account = nullptr;
+         std::vector<uint64_t>          logins;       // for pure-user-driver merge path
+         std::vector<const UserInfo*>   user_ptrs;    // all users contributing to this bucket
+         std::vector<DealRow>           deals_owned;
+         std::vector<PositionRow>       positions_owned;
+         std::vector<OpenOrderRow>      open_orders_owned;
+         std::vector<HistoryOrderRow>   history_orders_owned;
+      };
+      std::vector<std::string>            order;
+      std::unordered_map<std::string, Acc> by_key;
+
+      auto touch_or_seed = [&](const std::vector<std::pair<std::string,double>>& parts,
+                                const UserInfo* u) -> Acc& {
+         std::string k = compose_key(parts);
+         auto it = by_key.find(k);
+         if(it == by_key.end())
+         {
+            order.push_back(k);
+            Acc a; a.parts = parts;
+            if(u)
+            {
+               a.user = u;
+               auto ait = accounts.find(u->login);
+               a.account = (ait != accounts.end()) ? &ait->second : nullptr;
+            }
+            it = by_key.emplace(k, std::move(a)).first;
+         }
+         return it->second;
+      };
+
+      //--- Per-strategy predicate guards (user-driver AND deal-driver subsets).
+      auto eval_user_preds = [&](const UserInfo& u) -> bool {
+         for(size_t i = 0; i < user_idx.size(); ++i)
+         {
+            const Predicate* p = predicates[user_idx[i]];
+            if(!p) continue;
+            try { if(!FieldCatalog::EvalUserPredicate(*p, u)) return false; }
+            catch(...) { return false; }
+         }
+         return true;
+      };
+      auto eval_deal_preds = [&](const DealRow& d) -> bool {
+         for(size_t i = 0; i < deal_idx.size(); ++i)
+         {
+            const Predicate* p = predicates[deal_idx[i]];
+            if(!p) continue;
+            try { if(!FieldCatalog::EvalDealPredicate(*p, d)) return false; }
+            catch(...) { return false; }
+         }
+         return true;
+      };
+
+      for(const auto& u : users)
+      {
+         if(!eval_user_preds(u)) continue;
+         //--- Compute the user-side key parts once per user.
+         std::vector<std::pair<std::string,double>> user_parts(user_idx.size());
+         {
+            auto dit = daily.find(u.login);
+            const std::vector<DailyRow>* dp = (dit != daily.end()) ? &dit->second : nullptr;
+            for(size_t i = 0; i < user_idx.size(); ++i)
+            {
+               std::string txt; double num = 0.0;
+               try
+               {
+                  EvalContext ec; ec.user = &u; ec.daily = dp;
+                  txt = user_fields[i]->txt(ec);
+                  if(user_fields[i]->num) num = user_fields[i]->num({}, nullptr, ec);
+               }
+               catch(...) {}
+               user_parts[i] = {txt, num};
+            }
+         }
+
+         //--- Interleave user_parts + deal_parts back into strategy order.
+         auto compose_parts = [&](const std::vector<std::pair<std::string,double>>& dparts) {
+            std::vector<std::pair<std::string,double>> p(strategies.size());
+            for(size_t i = 0; i < user_idx.size(); ++i) p[user_idx[i]] = user_parts[i];
+            for(size_t i = 0; i < deal_idx.size(); ++i) p[deal_idx[i]] = dparts[i];
+            return p;
+         };
+
+         if(deal_idx.empty())
+         {
+            //--- Pure multi-user: one bucket key per (user_part_0, user_part_1, …).
+            Acc& a = touch_or_seed(compose_parts({}), &u);
+            a.logins.push_back(u.login);
+            a.user_ptrs.push_back(&u);
+            continue;
+         }
+
+         //--- Mixed/pure-deal: seed buckets from deals first.
+         auto dit = deals.find(u.login);
+         if(dit != deals.end())
+         {
+            for(const auto& d : dit->second)
+            {
+               if(!eval_deal_preds(d)) continue;
+               auto parts = compose_parts(deal_parts_from_deal(d));
+               Acc& a = touch_or_seed(parts, &u);
+               a.deals_owned.push_back(d);
+               if(a.user_ptrs.empty() || a.user_ptrs.back() != &u) a.user_ptrs.push_back(&u);
+            }
+         }
+         //--- Attach positions/orders to *existing* deal-seeded buckets (don't
+         //--- introduce new buckets). Skipped entirely when any deal strategy
+         //--- is "ticket" — no cross-record ticket mapping.
+         if(!has_ticket)
+         {
+            auto pit = positions.find(u.login);
+            if(pit != positions.end())
+               for(const auto& p : pit->second)
+               {
+                  if(p.symbol.empty()) continue;
+                  std::string k = compose_key(compose_parts(deal_parts_from_position(p)));
+                  auto it = by_key.find(k);
+                  if(it != by_key.end()) it->second.positions_owned.push_back(p);
+               }
+            auto oit = open_orders.find(u.login);
+            if(oit != open_orders.end())
+               for(const auto& o : oit->second)
+               {
+                  if(o.symbol.empty()) continue;
+                  std::string k = compose_key(compose_parts(deal_parts_from_open_order(o)));
+                  auto it = by_key.find(k);
+                  if(it != by_key.end()) it->second.open_orders_owned.push_back(o);
+               }
+            auto hit = history_orders.find(u.login);
+            if(hit != history_orders.end())
+               for(const auto& o : hit->second)
+               {
+                  if(o.symbol.empty()) continue;
+                  std::string k = compose_key(compose_parts(deal_parts_from_history_order(o)));
+                  auto it = by_key.find(k);
+                  if(it != by_key.end()) it->second.history_orders_owned.push_back(o);
+               }
+         }
+      }
+
+      std::vector<RowContext> out;
+      out.reserve(order.size());
+      for(const auto& k : order)
+      {
+         Acc& a = by_key[k];
+         RowContext rc;
+         rc.pivot_text  = k;
+         rc.pivot_num   = a.parts.empty() ? 0.0 : a.parts[0].second;
+         rc.pivot_parts = std::move(a.parts);
+         rc.user        = a.user;
+         rc.account     = a.account;
+         rc.deals_owned          = std::move(a.deals_owned);
+         rc.positions_owned      = std::move(a.positions_owned);
+         rc.open_orders_owned    = std::move(a.open_orders_owned);
+         rc.history_orders_owned = std::move(a.history_orders_owned);
+         //--- Build bucket-user / bucket-account lists so Cat B/C accessors
+         //--- can sum across the bucket's users (city/comment/country/etc.).
+         rc.bucket_users = std::move(a.user_ptrs);
+         rc.bucket_accounts.reserve(rc.bucket_users.size());
+         for(const auto* up : rc.bucket_users)
+         {
+            auto ait = accounts.find(up->login);
+            rc.bucket_accounts.push_back(ait != accounts.end() ? &ait->second : nullptr);
+         }
+         if(deal_idx.empty())
+         {
+            //--- Pure multi-user: merge per-user collections for the bucket's logins.
+            AppendForLogins(rc.daily_owned,          daily,          a.logins);
+            AppendForLogins(rc.deals_owned,          deals,          a.logins);
+            AppendForLogins(rc.positions_owned,      positions,      a.logins);
+            AppendForLogins(rc.open_orders_owned,    open_orders,    a.logins);
+            AppendForLogins(rc.history_orders_owned, history_orders, a.logins);
+         }
+         else if(rc.user)
+         {
+            //--- Mixed/pure-deal: daily belongs to the representative user.
+            auto dit = daily.find(rc.user->login);
+            if(dit != daily.end()) rc.daily_owned = dit->second;
+         }
+         out.push_back(std::move(rc));
       }
       return out;
    }
@@ -695,25 +1026,38 @@ void Engine::Run(AppContext& ctx, int64_t job_id)
    JobRepo::UpdateStatus(*ctx.db, job_id, JobStatus::Running, 0.80);
 
    //--- Pivot-aware row generation --------------------------------
-   //--- Whatever identifier sits in the first column drives the row dimension.
-   //--- ChoosePivot routes user-source identifiers (login, group, country,
-   //--- comment, currency, status, …) through the generic user-key builder, and
-   //--- routes symbol/ticket through their deal-driven builders. The optional
-   //--- row_predicate (designer's "Filter rows" panel) narrows the upstream
-   //--- collection (users for user-driver, deals for deal-driver).
-   const PivotStrategy strategy = ChoosePivot(tpl);
-   const Predicate* row_pred = (!tpl.columns.empty() && tpl.columns[0].row_predicate)
-                                  ? tpl.columns[0].row_predicate.get()
-                                  : nullptr;
+   //--- Every identifier column with pivot_key=true drives the row dimension.
+   //--- Single-key cases route to the existing specialised builders so they
+   //--- stay byte-identical with pre-change behaviour. Multi-key cases (>=2
+   //--- pivot columns) go through BuildMultiPivotContexts, which composes a
+   //--- tuple key from each pivot column's value in column order.
+   const std::vector<PivotStrategy> strategies = ChoosePivots(tpl);
+   std::vector<const Predicate*> predicates;
+   predicates.reserve(strategies.size());
+   for(const auto& s : strategies)
+   {
+      const Predicate* p = (s.col_index < tpl.columns.size()
+                            && tpl.columns[s.col_index].row_predicate)
+                              ? tpl.columns[s.col_index].row_predicate.get()
+                              : nullptr;
+      predicates.push_back(p);
+   }
+
+   //--- Reverse lookup: tpl.columns[ci] → strategy index (into strategies +
+   //--- rc.pivot_parts). -1 means "not a pivot column" (display-only or formula).
+   std::vector<int> col_to_strategy(tpl.columns.size(), -1);
+   for(size_t s = 0; s < strategies.size(); ++s)
+      if(strategies[s].col_index < tpl.columns.size())
+         col_to_strategy[strategies[s].col_index] = (int)s;
 
    std::vector<RowContext> contexts;
-   switch(strategy.driver)
+   if(strategies.size() == 1)
    {
-      case PivotStrategy::Driver::User:
+      const PivotStrategy& s = strategies[0];
+      const Predicate* row_pred = predicates[0];
+      if(s.driver == PivotStrategy::Driver::User)
       {
-         const FieldCatalog::Field* f = FieldCatalog::Lookup(strategy.field_name);
-         //--- ChoosePivot guarantees a user-source field with a txt accessor,
-         //--- but guard defensively against catalog/Template drift.
+         const FieldCatalog::Field* f = FieldCatalog::Lookup(s.field_name);
          if(!f || !f->txt)
          {
             const FieldCatalog::Field* lf = FieldCatalog::Lookup("login");
@@ -723,14 +1067,17 @@ void Engine::Run(AppContext& ctx, int64_t job_id)
          contexts = BuildUserKeyContexts(users, daily, deals, positions,
                                          open_orders, history_orders, accounts,
                                          row_pred, *f);
-         break;
       }
-      case PivotStrategy::Driver::Deal:
-         if(strategy.field_name == "symbol")
-            contexts = BuildSymbolContexts(deals, positions, open_orders, history_orders, row_pred);
-         else  // "ticket"
-            contexts = BuildTicketContexts(users, deals, accounts, row_pred);
-         break;
+      else if(s.field_name == "symbol")
+         contexts = BuildSymbolContexts(deals, positions, open_orders, history_orders, row_pred);
+      else  // "ticket"
+         contexts = BuildTicketContexts(users, deals, accounts, row_pred);
+   }
+   else
+   {
+      contexts = BuildMultiPivotContexts(users, daily, deals, positions,
+                                         open_orders, history_orders, accounts,
+                                         strategies, predicates);
    }
 
    std::vector<std::vector<GenericWriter::Cell>> rows;
@@ -755,6 +1102,8 @@ void Engine::Run(AppContext& ctx, int64_t job_id)
       ec.history_orders = rc.history_orders_view ? rc.history_orders_view : &rc.history_orders_owned;
       ec.date_params    = &date_params;
       ec.filters        = &filters;
+      ec.bucket_users   = &rc.bucket_users;
+      ec.bucket_accounts = &rc.bucket_accounts;
       ec.pivot_key_text = rc.pivot_text;
       ec.pivot_key_num  = rc.pivot_num;
 
@@ -774,8 +1123,24 @@ void Engine::Run(AppContext& ctx, int64_t job_id)
       col_values.reserve(tpl.columns.size());
       ec.column_values = &col_values;
 
-      for(const auto& c : tpl.columns)
+      for(size_t ci = 0; ci < tpl.columns.size(); ++ci)
       {
+         const auto& c = tpl.columns[ci];
+         //--- For pivot identifier columns swap the EvalContext's pivot key to
+         //--- *this* column's slice of the composite key, so symbol/ticket
+         //--- accessors (which read ec.pivot_key_*) render their own value
+         //--- rather than the joined-composite default.
+         const int sidx = col_to_strategy[ci];
+         if(sidx >= 0 && sidx < (int)rc.pivot_parts.size())
+         {
+            ec.pivot_key_text = rc.pivot_parts[sidx].first;
+            ec.pivot_key_num  = rc.pivot_parts[sidx].second;
+         }
+         else
+         {
+            ec.pivot_key_text = rc.pivot_text;
+            ec.pivot_key_num  = rc.pivot_num;
+         }
          if(c.kind == ColumnSpec::Kind::Identifier)
          {
             GenericWriter::Cell cell = EvalIdentifier(c, ec);

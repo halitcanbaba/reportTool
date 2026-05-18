@@ -21,6 +21,15 @@ struct EvalContext
    const std::vector<OpenOrderRow>*             open_orders    = nullptr;
    const std::vector<HistoryOrderRow>*          history_orders = nullptr;
 
+   //--- All UserInfo / AccountInfo in the current pivot bucket. Populated by
+   //--- multi-user pivots (group, country, city, comment, …) so Cat B / Cat C
+   //--- accessors can aggregate (sum) across the bucket instead of returning
+   //--- only the first user's value. For single-user buckets (login, ticket,
+   //--- login+symbol, …) these contain exactly one entry — sum reduces to the
+   //--- single value, preserving legacy behaviour.
+   const std::vector<const UserInfo*>*    bucket_users    = nullptr;
+   const std::vector<const AccountInfo*>* bucket_accounts = nullptr;
+
    //--- Shared across all logins for one job.
    const std::map<std::string, int64_t>* date_params = nullptr;  // name → Unix seconds (00:00 UTC)
    const CompiledFilters*                filters     = nullptr;  // deal bucket regex

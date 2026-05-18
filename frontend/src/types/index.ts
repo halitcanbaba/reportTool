@@ -160,9 +160,15 @@ export type Column = {
   format: ColumnFormat;
   source?: string;            // identifier-only
   expr?:   ExprNode;          // formula-only
-  //--- Pivot row filter — only used by the engine when this is the FIRST
-  //--- column and its identifier source is a pivot dimension
-  //--- (login | group → user predicate; symbol | ticket → deal predicate).
+  //--- When true on an identifier column, this column contributes to the row
+  //--- bucket key. The engine groups by the tuple of all pivot_key columns in
+  //--- column order. Backward compat: legacy templates lack this; on load the
+  //--- first identifier is implicitly pivot_key=true.
+  pivot_key?: boolean;
+  //--- Pivot row filter — applied per pivot_key column. For user-source
+  //--- identifiers (login, group, country, …) the predicate runs against
+  //--- UserInfo; for symbol/ticket it runs against each DealRow before
+  //--- bucketing.
   row_predicate?: Predicate | null;
 };
 

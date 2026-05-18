@@ -398,7 +398,10 @@ std::string Expression::ColumnsToJsonString(const std::vector<ColumnSpec>& cols)
       j["kind"]   = KindToStr(c.kind);
       j["format"] = FormatToStr(c.format);
       if(c.kind == ColumnSpec::Kind::Identifier)
-         j["source"] = c.source;
+      {
+         j["source"]    = c.source;
+         j["pivot_key"] = c.pivot_key;
+      }
       else if(c.expr)
          j["expr"] = NodeToJson(*c.expr);
       if(c.row_predicate)
@@ -418,6 +421,11 @@ bool Expression::ColumnsFromJsonString(const std::string& s,
       if(err) *err = "columns_json must be a JSON array";
       return false;
    }
+   //--- Backward-compat: when no column carries an explicit pivot_key, the
+   //--- first identifier column is implicitly the pivot — same as the legacy
+   //--- single-pivot behaviour. We need two passes: first parse the array,
+   //--- then patch up missing flags.
+   bool any_explicit_pivot = false;
    for(const auto& j : arr)
    {
       ColumnSpec c;
@@ -428,6 +436,11 @@ bool Expression::ColumnsFromJsonString(const std::string& s,
       if(c.kind == ColumnSpec::Kind::Identifier)
       {
          c.source = j.value("source", "");
+         if(j.contains("pivot_key") && j["pivot_key"].is_boolean())
+         {
+            c.pivot_key = j["pivot_key"].get<bool>();
+            any_explicit_pivot = any_explicit_pivot || c.pivot_key;
+         }
       }
       else if(j.contains("expr"))
       {
@@ -448,6 +461,13 @@ bool Expression::ColumnsFromJsonString(const std::string& s,
          }
       }
       out->push_back(std::move(c));
+   }
+   //--- Backward-compat patch: if the parsed JSON had no explicit pivot_key
+   //--- anywhere (legacy template), mark the first identifier as the pivot.
+   if(!any_explicit_pivot)
+   {
+      for(auto& c : *out)
+         if(c.kind == ColumnSpec::Kind::Identifier) { c.pivot_key = true; break; }
    }
    return true;
 }

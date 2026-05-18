@@ -659,7 +659,20 @@ namespace
       Add(std::move(f));
    }
 
+   //--- Returns true for return types that are naturally additive across
+   //--- multiple bucket members. money + int sum cleanly; pct/date/text do
+   //--- not (sum of percentages is meaningless), so we keep them at the
+   //--- single-user-/single-account semantic.
+   bool IsAdditive(const char* rt)
+   {
+      return rt && (std::string(rt) == "money" || std::string(rt) == "int");
+   }
+
    //--- User static numeric (category B). source = User, arity 0.
+   //--- In multi-user pivot buckets (group/country/city/comment/…) additive
+   //--- fields auto-sum across every user in the bucket. Single-user buckets
+   //--- (login, ticket, mixed login+symbol) collapse to one value — same as
+   //--- before. Non-additive fields keep the first-user semantic.
    void UserNum(const char* name, const char* label, const char* return_type,
                 double (*sel)(const UserInfo&))
    {
@@ -668,7 +681,14 @@ namespace
       f.category = "B"; f.category_label = "User Static Numeric";
       f.source = Source::User; f.arity = 0;
       f.return_type = return_type;
-      f.num = [sel](const std::vector<int64_t>&, const Predicate*, const EvalContext& ctx) -> double {
+      const bool additive = IsAdditive(return_type);
+      f.num = [sel, additive](const std::vector<int64_t>&, const Predicate*, const EvalContext& ctx) -> double {
+         if(additive && ctx.bucket_users && ctx.bucket_users->size() > 1)
+         {
+            double s = 0.0;
+            for(const auto* up : *ctx.bucket_users) if(up) s += sel(*up);
+            return s;
+         }
          const auto& u = Need(ctx.user, "user");
          return sel(u);
       };
@@ -676,6 +696,8 @@ namespace
    }
 
    //--- Live account (category C). source = Account, arity 0.
+   //--- Multi-user pivot bucket sums every contributing account's snapshot
+   //--- (acc_equity / acc_balance / acc_margin / …) when additive.
    void Acc(const char* name, const char* label, const char* return_type,
             double (*sel)(const AccountInfo&))
    {
@@ -684,7 +706,14 @@ namespace
       f.category = "C"; f.category_label = "Live Account Snapshot";
       f.source = Source::Account; f.arity = 0;
       f.return_type = return_type;
-      f.num = [sel](const std::vector<int64_t>&, const Predicate*, const EvalContext& ctx) -> double {
+      const bool additive = IsAdditive(return_type);
+      f.num = [sel, additive](const std::vector<int64_t>&, const Predicate*, const EvalContext& ctx) -> double {
+         if(additive && ctx.bucket_accounts && ctx.bucket_accounts->size() > 1)
+         {
+            double s = 0.0;
+            for(const auto* ap : *ctx.bucket_accounts) if(ap) s += sel(*ap);
+            return s;
+         }
          const auto& a = Need(ctx.account, "account");
          return sel(a);
       };
