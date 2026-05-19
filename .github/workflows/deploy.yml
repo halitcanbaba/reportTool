@@ -23,6 +23,11 @@ concurrency:
   group: deploy-prod
   cancel-in-progress: false
 
+#--- The bump step pushes a new commit + tag back to main, so the workflow
+#--- needs write access to the repository contents.
+permissions:
+  contents: write
+
 jobs:
   deploy:
     runs-on: [self-hosted, Windows, X64, production, reportTool]
@@ -34,7 +39,79 @@ jobs:
       SITES_ROOT:     C:\nginx-sites
 
     steps:
+      #--- Full history + persisted token so the auto-bump step below can
+      #--- commit + tag + push back to main. fetch-depth: 0 also keeps
+      #--- `git describe` / tag-aware tooling happy if added later.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      #--- Auto-bump patch version on every successful main deploy.
+      #--- - Reads frontend/package.json (the single source of truth).
+      #--- - PATCH-only increment (1.0.0 → 1.0.1 → 1.0.2 …). Manually edit
+      #---   the file for MAJOR/MINOR bumps.
+      #--- - Updates the same string in backend/.../HealthRoutes.cpp so the
+      #---   /health endpoint reports the matching number.
+      #--- - Commits with [skip ci] so this commit itself doesn't trigger
+      #---   another workflow run.
+      #--- - Tags vX.Y.Z and pushes both. Loop guard: skip if the head commit
+      #---   is already a release bump (chore(release): subject prefix).
+      - name: Bump version + tag
+        id: bump
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $headSubject = git log -1 --pretty=%s
+          if ($headSubject -like 'chore(release):*' -or $headSubject -like '*[skip ci]*') {
+            Write-Host "Head commit is a release / skip-ci commit; nothing to bump."
+            "skipped=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            return
+          }
+
+          $pkgPath = 'frontend/package.json'
+          $pkg = Get-Content $pkgPath -Raw | ConvertFrom-Json
+          $cur = [string]$pkg.version
+          if ($cur -notmatch '^(\d+)\.(\d+)\.(\d+)$') {
+            throw "package.json version '$cur' is not MAJOR.MINOR.PATCH"
+          }
+          $major = [int]$Matches[1]; $minor = [int]$Matches[2]; $patch = [int]$Matches[3] + 1
+          $next  = "$major.$minor.$patch"
+          Write-Host "Bumping $cur -> $next"
+
+          #--- package.json: rewrite using regex to preserve formatting/order
+          #--- (ConvertTo-Json reformats and reorders keys, which we don't want).
+          $pkgText = Get-Content $pkgPath -Raw
+          $pkgNew  = [regex]::Replace($pkgText, '"version"\s*:\s*"\d+\.\d+\.\d+"', '"version": "' + $next + '"', 1)
+          [System.IO.File]::WriteAllText($pkgPath, $pkgNew)
+
+          #--- HealthRoutes.cpp: same string surgery for the /health response.
+          $hrPath = 'backend/ReportTool/api/HealthRoutes.cpp'
+          $hrText = Get-Content $hrPath -Raw
+          $hrNew  = [regex]::Replace($hrText,
+              '("version"\s*,\s*)"\d+\.\d+\.\d+"',
+              '$1"' + $next + '"', 1)
+          [System.IO.File]::WriteAllText($hrPath, $hrNew)
+
+          #--- Commit + tag + push. [skip ci] in the commit subject prevents
+          #--- the resulting push event from re-triggering this workflow.
+          git config user.email 'actions@github.com'
+          git config user.name  'github-actions[bot]'
+          git add $pkgPath $hrPath
+          if ((git diff --cached --quiet; $LASTEXITCODE) -eq 0) {
+            Write-Host "No version changes to commit (already at $next?)."
+            "skipped=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            return
+          }
+          git commit -m "chore(release): v$next [skip ci]"
+          git tag "v$next"
+          git push origin "HEAD:${{ github.ref_name }}"
+          git push origin "v$next"
+
+          "version=$next"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "skipped=false"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Resolve instance parameters
         id: cfg

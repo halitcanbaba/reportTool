@@ -1,5 +1,9 @@
 import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+//--- Read the build's version from package.json so the sidebar label stays in
+//--- sync with the CI's auto-bump (deploy.yml rewrites package.json's version
+//--- on every main push, then the next build picks it up here automatically).
+import pkg from '../../package.json';
 
 const baseItems = [
   { to: '/managers',        label: 'Managers' },
@@ -28,7 +32,7 @@ export function Sidebar() {
     <aside className="w-60 shrink-0 bg-ink-900 text-ink-50 flex flex-col">
       <div className="px-6 py-6 border-b border-ink-800">
         <div className="font-mono text-lg tracking-tight">MT5 ReportTool</div>
-        <div className="text-xs text-ink-400 mt-1">v2.0.0</div>
+        <div className="text-xs text-ink-400 mt-1">v{pkg.version}</div>
       </div>
 
       <nav className="flex-1 py-4">
