@@ -451,6 +451,24 @@ jobs:
              try { & $nssm stop $svc 2>$null | Out-Null }
              catch { Write-Host "[$instance] nssm stop skipped: $($_.Exception.Message)" }
 
+             #--- Keep server.json's `port` in sync with the tenant's offset.
+             #--- Without this, changing port_offset in tenants.json only
+             #--- updates nginx and breaks the backend (which keeps listening
+             #--- on the old port). Other fields stay untouched.
+             $cfgPath = Join-Path $root 'config\server.json'
+             if (Test-Path $cfgPath) {
+                try {
+                   $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+                   if ([int]$cfg.port -ne $bePort) {
+                      Write-Host "[$instance] server.json port $($cfg.port) -> $bePort (sync from tenants.json)"
+                      $cfg.port = $bePort
+                      ($cfg | ConvertTo-Json -Depth 10) | Set-Content $cfgPath -Encoding utf8
+                   }
+                } catch {
+                   Write-Host "::warning ::[$instance] server.json sync skipped: $($_.Exception.Message)"
+                }
+             }
+
              $bk = Join-Path $root "releases\$tag-prev"
              New-Item -ItemType Directory -Path $bk -Force | Out-Null
              $curExe = Join-Path $root 'ReportTool.exe'
