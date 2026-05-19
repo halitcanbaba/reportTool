@@ -5,10 +5,23 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      #--- Tenant dropdown. The `options` list MUST stay in sync with
+      #--- `.github/tenants.json`: when a new tenant is added there, append
+      #--- its `instance` name here too so it appears in the manual deploy
+      #--- dropdown. `all` triggers a fan-out across every entry in
+      #--- tenants.json (same as a push event).
+      #--- For brand-new bootstraps, just type the name into a manual run
+      #--- after adding the entry to tenants.json (since `choice` won't let
+      #--- you type a value that isn''t in the list, you must add the option
+      #--- here first OR temporarily flip this back to `type: string`).
       instance:
-        description: 'Instance adı. BOŞ -> .github/tenants.json''daki TÜM tenant''lara deploy. Bir ad yazarsan SADECE o tenant.'
+        description: 'Tenant: `all` = TÜMÜ (tenants.json), aksi halde SADECE seçilen.'
+        type: choice
         required: false
-        default: ''
+        default: all
+        options:
+          - all
+          - default
       first_time_install:
         description: 'İlk kurulum (install root + service oluştur, server.json render, backup atla). instance + port_offset zorunlu.'
         type: boolean
@@ -148,7 +161,12 @@ jobs:
           $inputOffsetRaw = '${{ github.event.inputs.port_offset }}'
           $firstInstall = '${{ github.event.inputs.first_time_install }}' -eq 'true'
 
-          if (-not [string]::IsNullOrWhiteSpace($inputInstance)) {
+          #--- Three input modes (both push + workflow_dispatch route through here):
+          #---   * empty / 'all'  -> fan-out to every tenant in tenants.json
+          #---   * known instance -> only that tenant (offset from tenants.json)
+          #---   * unknown name   -> synthetic single tenant for first_time_install
+          $isFanOut = [string]::IsNullOrWhiteSpace($inputInstance) -or ($inputInstance -eq 'all')
+          if (-not $isFanOut) {
             $instance = $inputInstance.ToLower() -replace '[^a-z0-9_-]',''
             if ([string]::IsNullOrWhiteSpace($instance)) { throw "instance name invalid" }
             $picked = $tenants | Where-Object { $_.instance -eq $instance } | Select-Object -First 1
