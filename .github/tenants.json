@@ -1,3 +1,4 @@
 [
-  { "instance": "default", "port_offset": 0 }
+  { "instance": "default", "port_offset": 0 },
+  { "instance": "trive", "port_offset": 1 }
 ]
