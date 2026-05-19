@@ -397,7 +397,7 @@ export function TemplateDesignerPage() {
                       <code className="font-mono text-xs text-ink-700">{c.source || '—'}</code>
                       <FieldPicker
                         catalog={catalog}
-                        filter={f => f.arity === 0 && (f.is_identifier || f.source === 'user')}
+                        filter={f => f.arity === 0 && (f.is_identifier || f.source === 'user' || f.source === 'deal')}
                         placeholder="change…"
                         onPick={f => updateColumn(idx, { source: f.name })}
                       />
