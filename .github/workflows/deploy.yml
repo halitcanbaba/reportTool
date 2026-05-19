@@ -5,10 +5,23 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      #--- Tenant dropdown. The `options` list MUST stay in sync with
+      #--- `.github/tenants.json`: when a new tenant is added there, append
+      #--- its `instance` name here too so it appears in the manual deploy
+      #--- dropdown. `all` triggers a fan-out across every entry in
+      #--- tenants.json (same as a push event).
+      #--- For brand-new bootstraps, just type the name into a manual run
+      #--- after adding the entry to tenants.json (since `choice` won't let
+      #--- you type a value that isn''t in the list, you must add the option
+      #--- here first OR temporarily flip this back to `type: string`).
       instance:
-        description: 'Instance adı. BOŞ → .github/tenants.json''daki TÜM tenant''lara deploy. Bir ad yazarsan SADECE o tenant.'
+        description: 'Tenant: `all` = TÜMÜ (tenants.json), aksi halde SADECE seçilen.'
+        type: choice
         required: false
-        default: ''
+        default: all
+        options:
+          - all
+          - default
       first_time_install:
         description: 'İlk kurulum (install root + service oluştur, server.json render, backup atla). instance + port_offset zorunlu.'
         type: boolean
@@ -50,7 +63,7 @@ jobs:
 
       #--- Auto-bump patch version on every successful main deploy.
       #--- - Reads frontend/package.json (the single source of truth).
-      #--- - PATCH-only increment (1.0.0 → 1.0.1 → 1.0.2 …). Manually edit
+      #--- - PATCH-only increment (1.0.0 -> 1.0.1 -> 1.0.2 ...). Manually edit
       #---   the file for MAJOR/MINOR bumps.
       #--- - Updates the same string in backend/.../HealthRoutes.cpp so the
       #---   /health endpoint reports the matching number.
@@ -65,7 +78,11 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $headSubject = git log -1 --pretty=%s
-          if ($headSubject -like 'chore(release):*' -or $headSubject -like '*[skip ci]*') {
+          #--- PowerShell `-like` treats `[ ]` as a character class, so the
+          #--- pattern `*[skip ci]*` matches any string containing s/k/i/p/space/c
+          #--- (essentially every commit message). Use `.Contains()` for exact
+          #--- substring match instead.
+          if ($headSubject -like 'chore(release):*' -or $headSubject.Contains('[skip ci]')) {
             Write-Host "Head commit is a release / skip-ci commit; nothing to bump."
             "skipped=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
             return
@@ -100,7 +117,12 @@ jobs:
           git config user.email 'actions@github.com'
           git config user.name  'github-actions[bot]'
           git add $pkgPath $hrPath
-          if ((git diff --cached --quiet; $LASTEXITCODE) -eq 0) {
+          #--- `git diff --cached --quiet` exits 0 when there are NO staged
+          #--- changes, 1 when there are. PowerShell 5.1 can't inline that
+          #--- inside an `if (...)` parenthesised subexpression -- run it as a
+          #--- separate statement then inspect $LASTEXITCODE.
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) {
             Write-Host "No version changes to commit (already at $next?)."
             "skipped=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
             return
@@ -117,10 +139,10 @@ jobs:
       #--- (used by bootstrap steps that target one new tenant at a time).
       #---
       #--- Sources:
-      #---   • push event                      → ALL tenants in .github/tenants.json
-      #---   • workflow_dispatch with instance → ONLY that tenant; falls back to
+      #---   * push event                      -> ALL tenants in .github/tenants.json
+      #---   * workflow_dispatch with instance -> ONLY that tenant; falls back to
       #---     a synthetic entry (instance + port_offset from inputs) when the
-      #---     instance isn't yet in tenants.json — this is how first_time_install
+      #---     instance isn't yet in tenants.json -- this is how first_time_install
       #---     bootstraps a brand-new tenant before it's been registered.
       - name: Resolve instance parameters
         id: cfg
@@ -139,7 +161,12 @@ jobs:
           $inputOffsetRaw = '${{ github.event.inputs.port_offset }}'
           $firstInstall = '${{ github.event.inputs.first_time_install }}' -eq 'true'
 
-          if (-not [string]::IsNullOrWhiteSpace($inputInstance)) {
+          #--- Three input modes (both push + workflow_dispatch route through here):
+          #---   * empty / 'all'  -> fan-out to every tenant in tenants.json
+          #---   * known instance -> only that tenant (offset from tenants.json)
+          #---   * unknown name   -> synthetic single tenant for first_time_install
+          $isFanOut = [string]::IsNullOrWhiteSpace($inputInstance) -or ($inputInstance -eq 'all')
+          if (-not $isFanOut) {
             $instance = $inputInstance.ToLower() -replace '[^a-z0-9_-]',''
             if ([string]::IsNullOrWhiteSpace($instance)) { throw "instance name invalid" }
             $picked = $tenants | Where-Object { $_.instance -eq $instance } | Select-Object -First 1
@@ -304,7 +331,7 @@ jobs:
           $masterKey = (Get-Content $keyPath -Raw).Trim()
 
           # Render config\server.json from repo template
-          # Backend now binds loopback only — nginx is the public-facing layer.
+          # Backend now binds loopback only -- nginx is the public-facing layer.
           $tmpl = 'backend\config\server.json'
           if (-not (Test-Path $tmpl)) { throw "$tmpl missing in repo" }
           $cfg = Get-Content $tmpl -Raw | ConvertFrom-Json
@@ -374,7 +401,7 @@ jobs:
       #--- array) and runs the backend + frontend swap for each entry. Build
       #--- artifacts (EXE + dist) are produced once by earlier steps and reused
       #--- per tenant. Failure on one tenant attempts a per-tenant rollback,
-      #--- then aborts (subsequent tenants are NOT deployed — re-run the
+      #--- then aborts (subsequent tenants are NOT deployed -- re-run the
       #--- workflow to retry once the underlying issue is fixed).
       - name: Deploy to tenants
         shell: powershell
@@ -417,7 +444,7 @@ jobs:
              Write-Host "=============================================================="
 
              if (-not (Test-Path $root)) {
-                throw "[$instance] install root missing: $root — run workflow_dispatch with instance=$instance and first_time_install=true to bootstrap"
+                throw "[$instance] install root missing: $root -- run workflow_dispatch with instance=$instance and first_time_install=true to bootstrap"
              }
 
              #--- Backend deploy --------------------------------------------
@@ -454,7 +481,7 @@ jobs:
                 } catch { }
              }
              if (-not $ok) {
-                Write-Host "[$instance] backend /health failed — rolling back"
+                Write-Host "[$instance] backend /health failed -- rolling back"
                 try { & $nssm stop $svc 2>$null | Out-Null } catch { }
                 $bkExe = Join-Path $bk 'ReportTool.exe'
                 if (Test-Path $bkExe) {
@@ -496,7 +523,7 @@ jobs:
 
              & $nginxExe -p "$env:NGINX_DIR\" -t
              if ($LASTEXITCODE -ne 0) {
-                Write-Host "[$instance] nginx -t failed — rolling back"
+                Write-Host "[$instance] nginx -t failed -- rolling back"
                 Remove-Item $confPath -Force -ErrorAction SilentlyContinue
                 if (Test-Path $distBak) {
                    Remove-Item $distDst -Recurse -Force
@@ -521,7 +548,7 @@ jobs:
                 } catch { }
              }
              if (-not $ok) {
-                Write-Host "[$instance] frontend /health failed — rolling back dist + conf"
+                Write-Host "[$instance] frontend /health failed -- rolling back dist + conf"
                 Remove-Item $confPath -Force -ErrorAction SilentlyContinue
                 if (Test-Path $distBak) {
                    Remove-Item $distDst -Recurse -Force
