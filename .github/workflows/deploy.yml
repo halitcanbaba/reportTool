@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       instance:
-        description: 'Instance adı. BOŞ → .github/tenants.json''daki TÜM tenant''lara deploy. Bir ad yazarsan SADECE o tenant.'
+        description: 'Instance adı. BOŞ -> .github/tenants.json''daki TÜM tenant''lara deploy. Bir ad yazarsan SADECE o tenant.'
         required: false
         default: ''
       first_time_install:
@@ -50,7 +50,7 @@ jobs:
 
       #--- Auto-bump patch version on every successful main deploy.
       #--- - Reads frontend/package.json (the single source of truth).
-      #--- - PATCH-only increment (1.0.0 → 1.0.1 → 1.0.2 …). Manually edit
+      #--- - PATCH-only increment (1.0.0 -> 1.0.1 -> 1.0.2 ...). Manually edit
       #---   the file for MAJOR/MINOR bumps.
       #--- - Updates the same string in backend/.../HealthRoutes.cpp so the
       #---   /health endpoint reports the matching number.
@@ -102,7 +102,7 @@ jobs:
           git add $pkgPath $hrPath
           #--- `git diff --cached --quiet` exits 0 when there are NO staged
           #--- changes, 1 when there are. PowerShell 5.1 can't inline that
-          #--- inside an `if (...)` parenthesised subexpression — run it as a
+          #--- inside an `if (...)` parenthesised subexpression -- run it as a
           #--- separate statement then inspect $LASTEXITCODE.
           git diff --cached --quiet
           if ($LASTEXITCODE -eq 0) {
@@ -122,10 +122,10 @@ jobs:
       #--- (used by bootstrap steps that target one new tenant at a time).
       #---
       #--- Sources:
-      #---   • push event                      → ALL tenants in .github/tenants.json
-      #---   • workflow_dispatch with instance → ONLY that tenant; falls back to
+      #---   * push event                      -> ALL tenants in .github/tenants.json
+      #---   * workflow_dispatch with instance -> ONLY that tenant; falls back to
       #---     a synthetic entry (instance + port_offset from inputs) when the
-      #---     instance isn't yet in tenants.json — this is how first_time_install
+      #---     instance isn't yet in tenants.json -- this is how first_time_install
       #---     bootstraps a brand-new tenant before it's been registered.
       - name: Resolve instance parameters
         id: cfg
@@ -309,7 +309,7 @@ jobs:
           $masterKey = (Get-Content $keyPath -Raw).Trim()
 
           # Render config\server.json from repo template
-          # Backend now binds loopback only — nginx is the public-facing layer.
+          # Backend now binds loopback only -- nginx is the public-facing layer.
           $tmpl = 'backend\config\server.json'
           if (-not (Test-Path $tmpl)) { throw "$tmpl missing in repo" }
           $cfg = Get-Content $tmpl -Raw | ConvertFrom-Json
@@ -379,7 +379,7 @@ jobs:
       #--- array) and runs the backend + frontend swap for each entry. Build
       #--- artifacts (EXE + dist) are produced once by earlier steps and reused
       #--- per tenant. Failure on one tenant attempts a per-tenant rollback,
-      #--- then aborts (subsequent tenants are NOT deployed — re-run the
+      #--- then aborts (subsequent tenants are NOT deployed -- re-run the
       #--- workflow to retry once the underlying issue is fixed).
       - name: Deploy to tenants
         shell: powershell
@@ -422,7 +422,7 @@ jobs:
              Write-Host "=============================================================="
 
              if (-not (Test-Path $root)) {
-                throw "[$instance] install root missing: $root — run workflow_dispatch with instance=$instance and first_time_install=true to bootstrap"
+                throw "[$instance] install root missing: $root -- run workflow_dispatch with instance=$instance and first_time_install=true to bootstrap"
              }
 
              #--- Backend deploy --------------------------------------------
@@ -459,7 +459,7 @@ jobs:
                 } catch { }
              }
              if (-not $ok) {
-                Write-Host "[$instance] backend /health failed — rolling back"
+                Write-Host "[$instance] backend /health failed -- rolling back"
                 try { & $nssm stop $svc 2>$null | Out-Null } catch { }
                 $bkExe = Join-Path $bk 'ReportTool.exe'
                 if (Test-Path $bkExe) {
@@ -501,7 +501,7 @@ jobs:
 
              & $nginxExe -p "$env:NGINX_DIR\" -t
              if ($LASTEXITCODE -ne 0) {
-                Write-Host "[$instance] nginx -t failed — rolling back"
+                Write-Host "[$instance] nginx -t failed -- rolling back"
                 Remove-Item $confPath -Force -ErrorAction SilentlyContinue
                 if (Test-Path $distBak) {
                    Remove-Item $distDst -Recurse -Force
@@ -526,7 +526,7 @@ jobs:
                 } catch { }
              }
              if (-not $ok) {
-                Write-Host "[$instance] frontend /health failed — rolling back dist + conf"
+                Write-Host "[$instance] frontend /health failed -- rolling back dist + conf"
                 Remove-Item $confPath -Force -ErrorAction SilentlyContinue
                 if (Test-Path $distBak) {
                    Remove-Item $distDst -Recurse -Force
