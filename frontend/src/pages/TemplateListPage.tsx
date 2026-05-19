@@ -125,6 +125,7 @@ export function TemplateListPage() {
           rows={items}
           rowKey={t => t.id}
           folderIdOf={t => t.folder_id ?? null}
+          onMoved={reload}
           columns={columns}
           onDuplicateFolder={duplicateFolder}
           rowActions={t => (

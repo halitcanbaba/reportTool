@@ -35,6 +35,7 @@ namespace
          { "relative_n",        r.relative_n },
          { "top_n_override",    r.top_n_override },
          { "folder_id",         r.folder_id ? json(r.folder_id) : json(nullptr) },
+         { "sort_order",        r.sort_order },
          { "created_at",        r.created_at },
          { "updated_at",        r.updated_at },
       };

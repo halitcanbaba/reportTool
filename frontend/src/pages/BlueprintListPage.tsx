@@ -130,6 +130,7 @@ export function BlueprintListPage() {
           rows={items}
           rowKey={b => b.id}
           folderIdOf={b => b.folder_id ?? null}
+          onMoved={reload}
           columns={columns}
           onDuplicateFolder={duplicateFolder}
           rowActions={b => (

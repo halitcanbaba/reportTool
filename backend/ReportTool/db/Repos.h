@@ -97,6 +97,19 @@ namespace FolderRepo
    //--- Move an entity row to a folder (folder_id=0 → NULL = unfiled).
    bool    Move(SqliteDb& db, const std::string& entity_type,
                 int64_t entity_id, int64_t folder_id);
+
+   //--- v13: cross-table sort utilities. The mixed move handler in
+   //--- FolderRoutes uses these to enumerate + renumber every sibling
+   //--- (folder + entity) at a level so folders and entities can be
+   //--- intermixed freely in the user's chosen order.
+   struct LevelEntity { int64_t id; int sort_order; };
+   std::vector<LevelEntity> ListEntitiesAtLevel(SqliteDb& db,
+                                                const std::string& entity_type,
+                                                int64_t folder_id /* 0 = root */);
+   bool    SetEntitySortOrder(SqliteDb& db, const std::string& entity_type,
+                              int64_t entity_id, int sort_order);
+   bool    MoveEntityWithOrder(SqliteDb& db, const std::string& entity_type,
+                               int64_t entity_id, int64_t folder_id, int sort_order);
 }
 
 namespace UserRepo

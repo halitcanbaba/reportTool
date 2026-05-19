@@ -127,6 +127,7 @@ export function AccountFilterListPage() {
           rows={items}
           rowKey={f => f.id}
           folderIdOf={f => f.folder_id ?? null}
+          onMoved={reload}
           columns={columns}
           onDuplicateFolder={duplicateFolder}
           rowActions={f => (

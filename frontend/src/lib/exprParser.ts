@@ -116,7 +116,7 @@ function tokenize(s: string): Token[] {
   return out;
 }
 
-const FILTER_KEYWORDS_OP = ['contains', 'startswith', 'endswith', 'in'] as const;
+const FILTER_KEYWORDS_OP = ['contains', 'startswith', 'endswith', 'in', 'glob'] as const;
 const PRED_KEYWORDS_BOOL = ['AND', 'OR', 'NOT'] as const;
 
 function isFilterOpKeyword(s: string): boolean {
@@ -378,7 +378,7 @@ function numText(v: number): string { return String(v); }
 
 const FILTER_OP_TO_TEXT: Record<FilterOp, string> = {
   eq: '=', neq: '!=', lt: '<', lte: '<=', gt: '>', gte: '>=',
-  regex: '~', contains: 'contains', startswith: 'startswith', endswith: 'endswith', in: 'in',
+  regex: '~', glob: 'glob', contains: 'contains', startswith: 'startswith', endswith: 'endswith', in: 'in',
 };
 
 function quoteStr(s: string): string {

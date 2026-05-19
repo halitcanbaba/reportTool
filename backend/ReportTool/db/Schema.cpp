@@ -3,7 +3,7 @@
 
 namespace
 {
-   constexpr int kCurrentSchemaVersion = 12;
+   constexpr int kCurrentSchemaVersion = 13;
 
    //--- Tables that survive every version (managers, regex_filters,
    //--- daily_cache, deal_cache). These are idempotent.
@@ -373,6 +373,25 @@ namespace
          return false;
       return WriteVersion(db, 12, err);
    }
+
+   //--- v12 → v13: per-entity sort_order so folders + entities can be
+   //--- freely intermixed at any level by the user via drag-drop. Existing
+   //--- rows default to 0; the move endpoint renumbers all siblings to
+   //--- 10, 20, 30, … on any drop, so future drops always have headroom.
+   bool MigrateToV13(SqliteDb& db, std::string* err)
+   {
+      const char* tables[] = {
+         "report_templates", "schedules", "formula_blueprints",
+         "ready_made_reports", "account_filters",
+      };
+      for(const char* t : tables)
+      {
+         const std::string sql = std::string("ALTER TABLE ") + t
+            + " ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0";
+         if(!db.Exec(sql, err)) return false;
+      }
+      return WriteVersion(db, 13, err);
+   }
 }
 
 bool Schema::Apply(SqliteDb& db, std::string* err)
@@ -408,6 +427,19 @@ bool Schema::Apply(SqliteDb& db, std::string* err)
       //--- v12: soft-delete on report_templates.
       if(!db.Exec("ALTER TABLE report_templates ADD COLUMN deleted_at INTEGER NULL", err))
          return false;
+      //--- v13: per-entity sort_order on the five user-content tables.
+      {
+         const char* tables[] = {
+            "report_templates", "schedules", "formula_blueprints",
+            "ready_made_reports", "account_filters",
+         };
+         for(const char* t : tables)
+         {
+            const std::string sql = std::string("ALTER TABLE ") + t
+               + " ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0";
+            if(!db.Exec(sql, err)) return false;
+         }
+      }
       return WriteVersion(db, kCurrentSchemaVersion, err);
    }
    if(v < 2)
@@ -453,6 +485,10 @@ bool Schema::Apply(SqliteDb& db, std::string* err)
    if(v < 12)
    {
       if(!MigrateToV12(db, err)) return false;
+   }
+   if(v < 13)
+   {
+      if(!MigrateToV13(db, err)) return false;
    }
    //--- v >= current: no-op.
    return true;

@@ -106,12 +106,56 @@ namespace
       }
    }
 
+   //--- Translate a shell-style glob to an anchored, case-insensitive regex.
+   //--- `*` matches any run of characters; `?` matches any single character;
+   //--- every other regex metacharacter is escaped to its literal form. The
+   //--- result is wrapped in ^...$ so `g*` only matches strings that begin
+   //--- with 'g' (matches MT5 group-mask semantics — `g*` ≠ "contains g").
+   std::string GlobToRegex(const std::string& glob)
+   {
+      std::string out;
+      out.reserve(glob.size() + 8);
+      out += '^';
+      for(char c : glob)
+      {
+         switch(c)
+         {
+            case '*': out += ".*"; break;
+            case '?': out += "."; break;
+            case '.': case '+': case '(': case ')': case '[': case ']':
+            case '{': case '}': case '^': case '$': case '|': case '\\':
+               out += '\\'; out += c; break;
+            default:
+               out += c;
+         }
+      }
+      out += '$';
+      return out;
+   }
+
    bool CmpText(const std::string& lhs, FilterOp op, const std::string& rhs)
    {
       if(op == FilterOp::Eq)  return lhs == rhs;
       if(op == FilterOp::Neq) return lhs != rhs;
-      if(op == FilterOp::Regex)
-         return std::regex_search(lhs, CachedRegex(rhs));
+      if(op == FilterOp::Regex || op == FilterOp::Glob)
+      {
+         //--- "regex" op accepts EITHER a real regex pattern OR a glob like
+         //--- `g*` / `GANN-?\\*`. Try both interpretations and OR the results
+         //--- so the user doesn't have to know which dialect they typed.
+         //--- A glob pattern is translated to an anchored regex (^…$); a true
+         //--- regex pattern stays as-is and runs unanchored via regex_search.
+         try
+         {
+            if(std::regex_search(lhs, CachedRegex(rhs))) return true;
+         }
+         catch(const std::regex_error&) { /* invalid as regex — try glob */ }
+         try
+         {
+            if(std::regex_search(lhs, CachedRegex(GlobToRegex(rhs)))) return true;
+         }
+         catch(const std::regex_error&) { /* should never throw — escaped */ }
+         return false;
+      }
       if(op == FilterOp::Contains)
          return LowerAscii(lhs).find(LowerAscii(rhs)) != std::string::npos;
       if(op == FilterOp::StartsWith)
@@ -1522,9 +1566,22 @@ namespace
       deal.push_back({"entry", "Entry", VT::Enum, {
          {0, "IN"}, {1, "OUT"}, {2, "INOUT"}, {3, "OUT_BY"},
       }});
+      //--- MT5 EnDealReason values (MT5APIDeal.h). The previous labels here
+      //--- were incorrect — every value was mis-mapped, masking stop-out (5)
+      //--- as "MOBILE". Position and Order reason enums share the same numeric
+      //--- mapping per MT5 SDK; this list covers all three so the predicate
+      //--- editor renders accurate names regardless of source.
       deal.push_back({"reason", "Reason", VT::Enum, {
-         {0, "CLIENT"}, {1, "EXPERT"}, {2, "DEALER"}, {3, "SIGNAL"}, {4, "GATEWAY"},
-         {5, "MOBILE"}, {6, "WEB"}, {7, "API"},
+         {0,  "CLIENT"},           {1,  "EXPERT"},     {2,  "DEALER"},
+         {3,  "SL"},                {4,  "TP"},         {5,  "SO"},
+         {6,  "ROLLOVER"},          {7,  "EXTERNAL_CLIENT"},
+         {8,  "VMARGIN"},           {9,  "GATEWAY"},
+         {10, "SIGNAL"},            {11, "SETTLEMENT"},
+         {12, "TRANSFER"},          {13, "SYNC"},
+         {14, "EXTERNAL_SERVICE"},  {15, "MIGRATION"},
+         {16, "MOBILE"},            {17, "WEB"},
+         {18, "SPLIT"},             {19, "CORPORATE_ACTION"},
+         {20, "ULTENCY"},           {21, "COVERAGE"},
       }});
       deal.push_back({"profit",        "Profit",        VT::Num, {}});
       deal.push_back({"profit_raw",    "Profit Raw",    VT::Num, {}});

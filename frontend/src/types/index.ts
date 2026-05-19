@@ -60,6 +60,7 @@ export type AccountFilter = {
   manager_id: number | null;
   user_predicate?: Predicate | null;
   folder_id?: number | null;
+  sort_order?: number;
   created_at: number;
   updated_at: number;
 };
@@ -89,7 +90,7 @@ export type Folder = {
 
 export type FilterOp =
   | 'eq' | 'neq' | 'lt' | 'lte' | 'gt' | 'gte'
-  | 'regex' | 'contains' | 'startswith' | 'endswith' | 'in';
+  | 'regex' | 'glob' | 'contains' | 'startswith' | 'endswith' | 'in';
 
 export type PredCmp = {
   kind: 'cmp';
@@ -191,6 +192,7 @@ export type Template = {
   sort: SortSpec;
   default_top_n: number;
   folder_id?: number | null;
+  sort_order?: number;
   //--- v12 soft-delete. Templates hidden from the list when set; the row
   //--- still exists so referencing jobs / ready-mades can render the name.
   //--- Engine refuses to run a deleted template.
@@ -208,6 +210,7 @@ export type FormulaBlueprint = {
   date_params: string[];
   expr: ExprNode;
   folder_id?: number | null;
+  sort_order?: number;
   created_at: number;
   updated_at: number;
 };
@@ -232,6 +235,7 @@ export type ReadyMadeReport = {
   relative_n: number;
   top_n_override: number;
   folder_id?: number | null;
+  sort_order?: number;
   created_at: number;
   updated_at: number;
 };
@@ -266,6 +270,7 @@ export type ScheduleEntry = {
   delivery_format: ScheduleDeliveryFormat;
   enabled: boolean;
   folder_id?: number | null;
+  sort_order?: number;
   next_run_at: number;
   last_run_at: number;
   last_status: string;

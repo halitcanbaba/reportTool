@@ -231,6 +231,7 @@ export function ScheduleListPage() {
           rowKey={s => s.id}
           folderIdOf={s => s.folder_id ?? null}
           rowClassName={s => (s.enabled ? '' : 'opacity-60')}
+          onMoved={reload}
           columns={columns}
           onDuplicateFolder={duplicateFolder}
           rowActions={s => (

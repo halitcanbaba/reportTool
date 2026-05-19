@@ -36,6 +36,7 @@ namespace
          { "manager_id",     f.manager_id ? json(f.manager_id) : json(nullptr) },
          { "user_predicate", f.user_predicate ? Expression::PredicateToJson(*f.user_predicate) : json(nullptr) },
          { "folder_id",      f.folder_id ? json(f.folder_id) : json(nullptr) },
+         { "sort_order",     f.sort_order },
          { "created_at",     f.created_at },
          { "updated_at",     f.updated_at },
       };

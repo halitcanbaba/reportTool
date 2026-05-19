@@ -206,6 +206,7 @@ export function ReadyMadeListPage() {
           rows={items}
           rowKey={rm => rm.id}
           folderIdOf={rm => rm.folder_id ?? null}
+          onMoved={reload}
           columns={columns}
           onDuplicateFolder={duplicateFolder}
           rowActions={rm => (

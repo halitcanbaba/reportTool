@@ -1189,6 +1189,32 @@ void Engine::Run(AppContext& ctx, int64_t job_id)
             });
       }
    }
+   else if(!strategies.empty())
+   {
+      //--- Default multi-pivot output order: group rows by the first pivot
+      //--- column, then the second, etc. (lexicographic on the already-
+      //--- evaluated cell values, so numeric pivots like `login` sort
+      //--- numerically and text pivots like `symbol` sort alphabetically).
+      //--- Without this, BuildMultiPivotContexts emits rows in user → deal
+      //--- iteration order which interleaves logins on (login, symbol).
+      std::vector<size_t> pivot_cols;
+      for(const auto& s : strategies)
+         if(s.col_index < tpl.columns.size())
+            pivot_cols.push_back(s.col_index);
+      if(!pivot_cols.empty())
+      {
+         std::sort(rows.begin(), rows.end(),
+            [&pivot_cols](const auto& a, const auto& b) {
+               for(size_t c : pivot_cols)
+               {
+                  if(c >= a.size() || c >= b.size()) continue;
+                  if(CellLess(a[c], b[c])) return true;
+                  if(CellLess(b[c], a[c])) return false;
+               }
+               return false;
+            });
+      }
+   }
    //--- Write outputs ---------------------------------------------
    //--- CSV gets the FULL sorted result set — downloads (CSV / XLSX / PDF on
    //--- the frontend) must be complete regardless of top_n. The preview JSON

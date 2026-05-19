@@ -16,7 +16,9 @@ const ENUM_OPS: FilterOp[]  = ['eq', 'neq', 'in'];
 
 const OP_LABEL: Record<FilterOp, string> = {
   eq: '=', neq: '≠', lt: '<', lte: '≤', gt: '>', gte: '≥',
-  regex: '~ regex', contains: 'contains', startswith: 'starts with', endswith: 'ends with', in: 'in [list]',
+  //--- "~ regex / glob" reflects that the backend accepts either dialect
+  //--- under the same op — a regex `^GANN-.*` and a glob `GANN-*` both work.
+  regex: '~ regex / glob', glob: 'glob', contains: 'contains', startswith: 'starts with', endswith: 'ends with', in: 'in [list]',
 };
 
 function opsForField(f?: FilterableField): FilterOp[] {

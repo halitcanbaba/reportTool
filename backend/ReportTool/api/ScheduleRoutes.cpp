@@ -36,6 +36,7 @@ namespace
          { "delivery_format",   s.delivery_format.empty() ? std::string("csv") : s.delivery_format },
          { "enabled",           s.enabled },
          { "folder_id",         s.folder_id ? json(s.folder_id) : json(nullptr) },
+         { "sort_order",        s.sort_order },
          { "hours",             s.hours },
          { "days_of_week",      s.days_of_week },
          { "next_run_at",       s.next_run_at },

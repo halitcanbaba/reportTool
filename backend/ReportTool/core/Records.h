@@ -297,6 +297,7 @@ struct AccountFilter
    //--- (covers IMTUser fields like comment, agent, zip, country, …).
    std::shared_ptr<Predicate> user_predicate;
    int64_t                   folder_id   = 0;     // 0 = NULL = unfiled (FK -> folders.id)
+   int                       sort_order  = 0;     // v13: rank among siblings (folder + entity intermix)
    int64_t                   created_at  = 0;
    int64_t                   updated_at  = 0;
 };
@@ -305,7 +306,7 @@ struct AccountFilter
 enum class FilterOp
 {
    Eq, Neq, Lt, Lte, Gt, Gte,
-   Regex, Contains, StartsWith, EndsWith, In
+   Regex, Contains, StartsWith, EndsWith, In, Glob
 };
 
 inline const char* FilterOpName(FilterOp op)
@@ -323,6 +324,7 @@ inline const char* FilterOpName(FilterOp op)
       case FilterOp::StartsWith: return "startswith";
       case FilterOp::EndsWith:   return "endswith";
       case FilterOp::In:         return "in";
+      case FilterOp::Glob:       return "glob";
    }
    return "?";
 }
@@ -340,6 +342,7 @@ inline bool FilterOpFromName(const std::string& s, FilterOp* out)
    if(s == "startswith") { *out = FilterOp::StartsWith; return true; }
    if(s == "endswith")   { *out = FilterOp::EndsWith;   return true; }
    if(s == "in")         { *out = FilterOp::In;         return true; }
+   if(s == "glob")       { *out = FilterOp::Glob;       return true; }
    return false;
 }
 
@@ -439,6 +442,7 @@ struct FormulaBlueprint
    std::vector<std::string>  date_params;       // param slot names used inside expr
    std::shared_ptr<ExprNode> expr;
    int64_t                   folder_id   = 0;   // 0 = NULL = unfiled (FK -> folders.id)
+   int                       sort_order  = 0;   // v13: rank among siblings
    int64_t                   created_at  = 0;
    int64_t                   updated_at  = 0;
 };
@@ -454,6 +458,7 @@ struct ReportTemplate
    SortSpec                 sort;
    uint32_t                 default_top_n = 0;   // 0 = no limit
    int64_t                  folder_id     = 0;   // 0 = NULL = unfiled (FK -> folders.id)
+   int                      sort_order    = 0;   // v13: rank among siblings
    int64_t                  created_at    = 0;
    int64_t                  updated_at    = 0;
    int64_t                  deleted_at    = 0;   // 0 = live; >0 = soft-deleted at that UTC second
@@ -492,6 +497,7 @@ struct ReadyMadeReport
    uint32_t     top_n_override     = 0;     // 0 = use template default
 
    int64_t      folder_id          = 0;     // 0 = NULL = unfiled (FK -> folders.id)
+   int          sort_order         = 0;     // v13: rank among siblings
    int64_t      created_at         = 0;
    int64_t      updated_at         = 0;
 };
@@ -519,6 +525,7 @@ struct ScheduleEntry
    std::string  delivery_format     = "csv"; // "csv" (SendDocument) | "text" (SendMessage summary)
    bool         enabled             = true;
    int64_t      folder_id           = 0;    // 0 = NULL = unfiled (FK -> folders.id)
+   int          sort_order          = 0;    // v13: rank among siblings
 
    int64_t      next_run_at         = 0;    // UTC unix
    int64_t      last_run_at         = 0;

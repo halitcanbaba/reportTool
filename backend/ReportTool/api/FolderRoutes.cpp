@@ -52,6 +52,112 @@ namespace
       }
       return false;
    }
+
+   //--- A row in the unified folder + entity sibling list at one level. `kind`
+   //--- is "folder" or "entity"; id resolves into the matching table.
+   struct LevelItem
+   {
+      std::string kind;
+      int64_t     id;
+      int         sort_order;
+   };
+
+   //--- Pull every folder and every entity at the given level, merged + sorted
+   //--- by (sort_order, id). Used by both folder-move and entity-move handlers
+   //--- so a drag-drop reorder can place a folder between two entities (and
+   //--- vice versa) — folders no longer get forced to the bottom.
+   std::vector<LevelItem> FetchLevelSiblings(SqliteDb& db, const std::string& entity_type,
+                                             int64_t target_parent_folder_id)
+   {
+      std::vector<LevelItem> out;
+      //--- Folders at this level.
+      for(const auto& f : FolderRepo::ListByEntity(db, entity_type))
+         if(f.parent_id == target_parent_folder_id)
+            out.push_back({ "folder", f.id, f.sort_order });
+      //--- Entities at this level.
+      for(const auto& e : FolderRepo::ListEntitiesAtLevel(db, entity_type, target_parent_folder_id))
+         out.push_back({ "entity", e.id, e.sort_order });
+      std::sort(out.begin(), out.end(), [](const LevelItem& a, const LevelItem& b){
+         if(a.sort_order != b.sort_order) return a.sort_order < b.sort_order;
+         return a.id < b.id;
+      });
+      return out;
+   }
+
+   //--- Renumber every sibling at the target level to (10, 20, 30, …) with the
+   //--- moved item placed before `before` (or appended when before.id == 0).
+   //--- Updates the moved item too: folder gets parent_id+sort_order; entity
+   //--- gets folder_id+sort_order. Caller has already validated cycle / type.
+   void ApplyMixedReorder(SqliteDb& db, const std::string& entity_type,
+                          const std::string& moving_kind, int64_t moving_id,
+                          int64_t target_parent_folder_id,
+                          const std::string& before_kind, int64_t before_id,
+                          int* moved_sort_order_out)
+   {
+      auto siblings = FetchLevelSiblings(db, entity_type, target_parent_folder_id);
+      //--- Remove moved item if it's already in the list (re-position case).
+      for(auto it = siblings.begin(); it != siblings.end(); )
+      {
+         if(it->kind == moving_kind && it->id == moving_id) it = siblings.erase(it);
+         else                                                ++it;
+      }
+      //--- Find insertion index.
+      size_t insert_at = siblings.size();
+      if(before_id)
+      {
+         for(size_t i = 0; i < siblings.size(); ++i)
+            if(siblings[i].kind == before_kind && siblings[i].id == before_id)
+               { insert_at = i; break; }
+      }
+      LevelItem moved{ moving_kind, moving_id, 0 };
+      siblings.insert(siblings.begin() + insert_at, moved);
+
+      //--- Renumber 10, 20, 30, … and persist only the rows whose sort_order
+      //--- (or parent) changes.
+      for(size_t i = 0; i < siblings.size(); ++i)
+      {
+         LevelItem& s = siblings[i];
+         const int desired = (int)((i + 1) * 10);
+         const bool is_moved = (s.kind == moving_kind && s.id == moving_id);
+         if(s.kind == "folder")
+         {
+            if(is_moved)
+            {
+               auto f = FolderRepo::Get(db, s.id);
+               if(f)
+               {
+                  f->parent_id = target_parent_folder_id;
+                  f->sort_order = desired;
+                  FolderRepo::Update(db, *f);
+                  if(moved_sort_order_out) *moved_sort_order_out = desired;
+               }
+            }
+            else if(s.sort_order != desired)
+            {
+               auto f = FolderRepo::Get(db, s.id);
+               if(f) { f->sort_order = desired; FolderRepo::Update(db, *f); }
+            }
+         }
+         else // entity
+         {
+            if(is_moved)
+            {
+               FolderRepo::MoveEntityWithOrder(db, entity_type, s.id,
+                                               target_parent_folder_id, desired);
+               if(moved_sort_order_out) *moved_sort_order_out = desired;
+            }
+            else if(s.sort_order != desired)
+            {
+               FolderRepo::SetEntitySortOrder(db, entity_type, s.id, desired);
+            }
+         }
+      }
+   }
+
+   bool IsValidBeforeKind(const std::string& s)
+   {
+      return s == "folder" || s == "entity";
+   }
 }
 
 void FolderRoutes::Register(httplib::Server& srv, AppContext* ctx)
@@ -138,12 +244,12 @@ void FolderRoutes::Register(httplib::Server& srv, AppContext* ctx)
       res.set_content(R"({"deleted":true})", "application/json");
    });
 
-   //--- PATCH /api/folders/:id/move  { parent_id: number|null, before_id?: number|null }
-   //--- Drag-drop reposition: nests this folder under `parent_id` (null = root)
-   //--- and places it immediately before `before_id` among its new siblings,
-   //--- or at the end when `before_id` is null/missing. Sibling sort_order is
-   //--- renumbered to a clean 10, 20, 30 … sequence so subsequent reorders
-   //--- always have headroom.
+   //--- PATCH /api/folders/:id/move
+   //--- body: { parent_id: number|null, before_id?: number|null, before_kind?: "folder"|"entity" }
+   //--- Drag-drop reposition for a folder. `before` (id + kind) may now point
+   //--- to ANY sibling at the new parent's level — another folder or an
+   //--- entity. ApplyMixedReorder renumbers folders and entities together so
+   //--- folders are no longer pinned to the bottom of the list.
    srv.Patch(R"(/api/folders/(\d+)/move)",
              [ctx](const httplib::Request& req, httplib::Response& res){
       const int64_t id = std::stoll(req.matches[1]);
@@ -167,60 +273,38 @@ void FolderRoutes::Register(httplib::Server& srv, AppContext* ctx)
             { SendError(res, 400, "cycle: parent_id is a descendant of this folder"); return; }
       }
 
-      //--- Resolve before_id (sibling under whose row the target is inserted).
-      int64_t before_id = 0;
+      //--- before is now (kind, id). Default kind is "folder" for backward compat.
+      int64_t     before_id   = 0;
+      std::string before_kind = "folder";
       if(j.contains("before_id") && !j["before_id"].is_null())
       {
          if(!j["before_id"].is_number_integer())
             { SendError(res, 400, "before_id must be integer or null"); return; }
          before_id = j["before_id"].get<int64_t>();
-         if(before_id == id) { SendError(res, 400, "before_id cannot equal folder id"); return; }
-         auto bf = FolderRepo::Get(*ctx->db, before_id);
-         if(!bf || bf->entity_type != target->entity_type || bf->parent_id != new_parent)
-            { SendError(res, 400, "before_id is not a sibling under parent_id"); return; }
       }
-
-      //--- Pull the new-parent's sibling list (excluding the target), insert
-      //--- the target at the requested position, then renumber 10, 20, 30 …
-      auto all = FolderRepo::ListByEntity(*ctx->db, target->entity_type);
-      std::vector<FolderRow> siblings;
-      for(const auto& f : all)
-         if(f.parent_id == new_parent && f.id != id)
-            siblings.push_back(f);
-      //--- ListByEntity already returns sort_order, id ordering.
-      size_t insert_at = siblings.size();   // append by default
-      if(before_id)
+      if(j.contains("before_kind") && j["before_kind"].is_string())
       {
-         for(size_t i = 0; i < siblings.size(); ++i)
-            if(siblings[i].id == before_id) { insert_at = i; break; }
+         before_kind = j["before_kind"].get<std::string>();
+         if(!IsValidBeforeKind(before_kind))
+            { SendError(res, 400, "before_kind must be 'folder' or 'entity'"); return; }
       }
-      FolderRow moved = *target;
-      moved.parent_id = new_parent;
-      siblings.insert(siblings.begin() + insert_at, moved);
+      if(before_id && before_kind == "folder" && before_id == id)
+         { SendError(res, 400, "before_id cannot equal folder id"); return; }
 
-      //--- Renumber + persist. The target gets its new parent_id + sort_order,
-      //--- siblings keep their parent_id and only update sort_order when changed.
-      for(size_t i = 0; i < siblings.size(); ++i)
-      {
-         FolderRow& s = siblings[i];
-         const int desired = (int)((i + 1) * 10);
-         if(s.id == id)
-         {
-            s.sort_order = desired;
-            FolderRepo::Update(*ctx->db, s);
-            moved = s;
-         }
-         else if(s.sort_order != desired)
-         {
-            s.sort_order = desired;
-            FolderRepo::Update(*ctx->db, s);
-         }
-      }
-      res.set_content(FolderToJson(moved).dump(), "application/json");
+      int new_sort = 0;
+      ApplyMixedReorder(*ctx->db, target->entity_type, "folder", id, new_parent,
+                         before_kind, before_id, &new_sort);
+      auto reread = FolderRepo::Get(*ctx->db, id);
+      if(!reread) { SendError(res, 500, "post-move read failed"); return; }
+      res.set_content(FolderToJson(*reread).dump(), "application/json");
    });
 
-   //--- PATCH /api/folders/move  { entity_type, entity_id, folder_id|null }
-   //--- Single endpoint used by drag-drop on the list pages.
+   //--- PATCH /api/folders/move
+   //--- body: { entity_type, entity_id, folder_id|null, before_id?, before_kind? }
+   //--- Move/position an entity row. `before` (id + kind) places this entity
+   //--- before that sibling (folder or entity) at the target folder level.
+   //--- Backward compat: when before_* is missing, behaviour matches the old
+   //--- "just change folder_id" semantics — sort_order is preserved.
    srv.Patch("/api/folders/move",
              [ctx](const httplib::Request& req, httplib::Response& res){
       json j = json::parse(req.body, nullptr, false);
@@ -237,6 +321,30 @@ void FolderRoutes::Register(httplib::Server& srv, AppContext* ctx)
             { SendError(res, 400, "folder_id must be integer or null"); return; }
          folder_id = j["folder_id"].get<int64_t>();
       }
+      //--- Positional reorder path (preferred): client supplies before_kind+id.
+      const bool wants_reorder = j.contains("before_id") || j.contains("before_kind");
+      if(wants_reorder)
+      {
+         int64_t     before_id   = 0;
+         std::string before_kind = "entity";
+         if(j.contains("before_id") && !j["before_id"].is_null())
+         {
+            if(!j["before_id"].is_number_integer())
+               { SendError(res, 400, "before_id must be integer or null"); return; }
+            before_id = j["before_id"].get<int64_t>();
+         }
+         if(j.contains("before_kind") && j["before_kind"].is_string())
+         {
+            before_kind = j["before_kind"].get<std::string>();
+            if(!IsValidBeforeKind(before_kind))
+               { SendError(res, 400, "before_kind must be 'folder' or 'entity'"); return; }
+         }
+         ApplyMixedReorder(*ctx->db, et, "entity", entity_id, folder_id,
+                           before_kind, before_id, nullptr);
+         res.set_content(R"({"ok":true})", "application/json");
+         return;
+      }
+      //--- Legacy path: just rebind folder_id without touching siblings.
       const bool ok = FolderRepo::Move(*ctx->db, et, entity_id, folder_id);
       if(!ok) { SendError(res, 404, "entity not found"); return; }
       res.set_content(R"({"ok":true})", "application/json");

@@ -133,6 +133,7 @@ namespace
          { "sort",          json{ {"column_key", t.sort.column_key}, {"direction", t.sort.descending ? "desc" : "asc"} } },
          { "default_top_n", t.default_top_n },
          { "folder_id",     t.folder_id ? json(t.folder_id) : json(nullptr) },
+         { "sort_order",    t.sort_order },
          { "deleted_at",    t.deleted_at ? json(t.deleted_at) : json(nullptr) },
          { "created_at",    t.created_at },
          { "updated_at",    t.updated_at },

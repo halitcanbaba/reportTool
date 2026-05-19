@@ -30,6 +30,7 @@ namespace
          { "date_params", dps },
          { "expr",        b.expr ? Expression::NodeToJson(*b.expr) : json(nullptr) },
          { "folder_id",   b.folder_id ? json(b.folder_id) : json(nullptr) },
+         { "sort_order",  b.sort_order },
          { "created_at",  b.created_at },
          { "updated_at",  b.updated_at },
       };
