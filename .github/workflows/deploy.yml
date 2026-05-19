@@ -65,7 +65,11 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $headSubject = git log -1 --pretty=%s
-          if ($headSubject -like 'chore(release):*' -or $headSubject -like '*[skip ci]*') {
+          #--- PowerShell `-like` treats `[ ]` as a character class, so the
+          #--- pattern `*[skip ci]*` matches any string containing s/k/i/p/space/c
+          #--- (essentially every commit message). Use `.Contains()` for exact
+          #--- substring match instead.
+          if ($headSubject -like 'chore(release):*' -or $headSubject.Contains('[skip ci]')) {
             Write-Host "Head commit is a release / skip-ci commit; nothing to bump."
             "skipped=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
             return
