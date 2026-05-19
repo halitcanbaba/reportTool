@@ -12,7 +12,7 @@ void HealthRoutes::Register(httplib::Server& srv, AppContext* ctx)
    srv.Get("/health", [ctx](const httplib::Request&, httplib::Response& res){
       json j = {
          { "status",   "ok" },
-         { "version",  "2.0.0" },
+         { "version",  "2.0.1" },
          { "uptime_s", (int64_t)time(nullptr) - g_started_at },
       };
       res.set_content(j.dump(), "application/json");
