@@ -6,16 +6,16 @@ on:
   workflow_dispatch:
     inputs:
       instance:
-        description: 'Instance adı (müşteri kimliği). Boş bırakılırsa "default".'
+        description: 'Instance adı. BOŞ → .github/tenants.json''daki TÜM tenant''lara deploy. Bir ad yazarsan SADECE o tenant.'
         required: false
-        default: 'default'
+        default: ''
       first_time_install:
-        description: 'İlk kurulum (install root + service oluştur, server.json render, backup atla)'
+        description: 'İlk kurulum (install root + service oluştur, server.json render, backup atla). instance + port_offset zorunlu.'
         type: boolean
         required: false
         default: false
       port_offset:
-        description: 'Port offset (backend=5151+N, frontend=8080+N). İlk kurulumda yeni müşteri için artır.'
+        description: 'Port offset (backend=5151+N, frontend=8080+N). Sadece first_time_install için kullanılır; mevcut tenant''larda tenants.json''daki değer kazanır.'
         required: false
         default: '0'
 
@@ -113,29 +113,67 @@ jobs:
           "version=$next"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "skipped=false"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
+      #--- Resolve the tenant fan-out list + the single-instance parameters
+      #--- (used by bootstrap steps that target one new tenant at a time).
+      #---
+      #--- Sources:
+      #---   • push event                      → ALL tenants in .github/tenants.json
+      #---   • workflow_dispatch with instance → ONLY that tenant; falls back to
+      #---     a synthetic entry (instance + port_offset from inputs) when the
+      #---     instance isn't yet in tenants.json — this is how first_time_install
+      #---     bootstraps a brand-new tenant before it's been registered.
       - name: Resolve instance parameters
         id: cfg
         shell: powershell
         run: |
-          $instance = '${{ github.event.inputs.instance }}'
-          if ([string]::IsNullOrWhiteSpace($instance)) { $instance = 'default' }
-          $instance = $instance.ToLower() -replace '[^a-z0-9_-]',''
-          if ([string]::IsNullOrWhiteSpace($instance)) { throw "instance name invalid" }
+          $ErrorActionPreference = 'Stop'
 
-          $offsetRaw = '${{ github.event.inputs.port_offset }}'
-          if ([string]::IsNullOrWhiteSpace($offsetRaw)) { $offsetRaw = '0' }
-          $offset = [int]$offsetRaw
-          if ($offset -lt 0 -or $offset -gt 900) { throw "port_offset out of range (0..900)" }
+          $tenantsPath = '.github/tenants.json'
+          if (-not (Test-Path $tenantsPath)) {
+            throw "tenants list missing: $tenantsPath"
+          }
+          $tenants = Get-Content $tenantsPath -Raw | ConvertFrom-Json
+          if ($tenants -isnot [array]) { $tenants = @($tenants) }
 
+          $inputInstance = '${{ github.event.inputs.instance }}'
+          $inputOffsetRaw = '${{ github.event.inputs.port_offset }}'
           $firstInstall = '${{ github.event.inputs.first_time_install }}' -eq 'true'
 
-          $suffix       = if ($instance -eq 'default') { '' } else { "-$instance" }
-          $installRoot  = "C:\ReportTool$suffix"
-          $serviceName  = "ReportTool$suffix"
-          $siteName     = "reporttool-$instance"
-          $siteDir      = "$env:SITES_ROOT\$siteName"
-          $nginxConf    = "$env:NGINX_DIR\conf\conf.d\$siteName.conf"
-          $backendPort  = 5151 + $offset
+          if (-not [string]::IsNullOrWhiteSpace($inputInstance)) {
+            $instance = $inputInstance.ToLower() -replace '[^a-z0-9_-]',''
+            if ([string]::IsNullOrWhiteSpace($instance)) { throw "instance name invalid" }
+            $picked = $tenants | Where-Object { $_.instance -eq $instance } | Select-Object -First 1
+            if (-not $picked) {
+              #--- Synthetic tenant from workflow_dispatch inputs (first_time_install path).
+              if ([string]::IsNullOrWhiteSpace($inputOffsetRaw)) { $inputOffsetRaw = '0' }
+              $offset = [int]$inputOffsetRaw
+              if ($offset -lt 0 -or $offset -gt 900) { throw "port_offset out of range (0..900)" }
+              $picked = [pscustomobject]@{ instance = $instance; port_offset = $offset }
+            }
+            $deployList = @($picked)
+          } else {
+            $deployList = $tenants
+          }
+
+          if ($deployList.Count -eq 0) { throw "no tenants to deploy" }
+
+          #--- Output: JSON array consumed by the deploy-fan-out step below.
+          $deployJson = ($deployList | ConvertTo-Json -Compress -Depth 4)
+          if ($deployList.Count -eq 1) { $deployJson = "[$deployJson]" }
+
+          #--- Pick a "single-tenant view" used by bootstrap-only steps. When
+          #--- the fan-out is multi-tenant (push event), bootstrap steps skip
+          #--- (first_install == 'false') so these values are unused.
+          $first = $deployList[0]
+          $instance = $first.instance
+          $offset = [int]$first.port_offset
+          $suffix = if ($instance -eq 'default') { '' } else { "-$instance" }
+          $installRoot = "C:\ReportTool$suffix"
+          $serviceName = "ReportTool$suffix"
+          $siteName = "reporttool-$instance"
+          $siteDir = "$env:SITES_ROOT\$siteName"
+          $nginxConf = "$env:NGINX_DIR\conf\conf.d\$siteName.conf"
+          $backendPort = 5151 + $offset
           $frontendPort = 8080 + $offset
 
           @"
@@ -150,9 +188,15 @@ jobs:
           first_install=$($firstInstall.ToString().ToLower())
           backend_health=http://127.0.0.1:$backendPort/health
           frontend_health=http://127.0.0.1:$frontendPort/health
+          deploy_count=$($deployList.Count)
           "@ | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-          Write-Host "instance=$instance  service=$serviceName  root=$installRoot  backend=$backendPort  frontend=$frontendPort  first=$firstInstall"
+          "deploy_list<<EOF"  | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          $deployJson         | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "EOF"               | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          $names = ($deployList | ForEach-Object { $_.instance }) -join ', '
+          Write-Host "fan-out: $($deployList.Count) tenant(s) -> $names"
 
       - name: Diagnostics
         shell: powershell
@@ -326,192 +370,198 @@ jobs:
           & $nssm set $svc DisplayName           "ReportTool Backend (${{ steps.cfg.outputs.instance }})"
           & $nssm set $svc ObjectName            LocalSystem
 
-      - name: Deploy backend
+      #--- Per-tenant deploy fan-out. Reads steps.cfg.outputs.deploy_list (JSON
+      #--- array) and runs the backend + frontend swap for each entry. Build
+      #--- artifacts (EXE + dist) are produced once by earlier steps and reused
+      #--- per tenant. Failure on one tenant attempts a per-tenant rollback,
+      #--- then aborts (subsequent tenants are NOT deployed — re-run the
+      #--- workflow to retry once the underlying issue is fixed).
+      - name: Deploy to tenants
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          $root  = '${{ steps.cfg.outputs.install_root }}'
-          $svc   = '${{ steps.cfg.outputs.service_name }}'
-          $nssm  = Join-Path $root 'bin\nssm.exe'
-          $first = '${{ steps.cfg.outputs.first_install }}' -eq 'true'
-          $exeSrc = '${{ steps.art.outputs.exe }}'
-          $exeDir = '${{ steps.art.outputs.exedir }}'
-          $tag = "$(Get-Date -Format yyyyMMdd-HHmmss)-$($env:GITHUB_SHA.Substring(0,7))"
-
-          if (-not (Test-Path $root)) { throw "Install root missing: $root (run with first_time_install)" }
-
-          try {
-            & $nssm stop $svc 2>$null | Out-Null
-          } catch {
-            Write-Host "NSSM stop skipped: $($_.Exception.Message)"
-          }
-
-          # Backup existing exe (skip if first install)
-          if (-not $first) {
-            $bk = Join-Path $root "releases\$tag-prev"
-            New-Item -ItemType Directory -Path $bk -Force | Out-Null
-            $cur = Join-Path $root 'ReportTool.exe'
-            if (Test-Path $cur) { Copy-Item $cur (Join-Path $bk 'ReportTool.exe') -Force }
-          }
-
-          Copy-Item $exeSrc (Join-Path $root 'ReportTool.exe') -Force
-
-          # MT5 DLL: prefer build-output sibling, else fallback to system-wide SDK
-          $dllDest = Join-Path $root 'MT5APIManager64.dll'
-          $dllBuild = Join-Path $exeDir 'MT5APIManager64.dll'
-          if (-not (Test-Path $dllDest)) {
-            if      (Test-Path $dllBuild)            { Copy-Item $dllBuild $dllDest -Force }
-            elseif  (Test-Path $env:MT5_DLL_SOURCE)  { Copy-Item $env:MT5_DLL_SOURCE $dllDest -Force }
-          }
-
-          # NSSM exits 1 when the service is still SERVICE_START_PENDING after
-          # its internal wait (slow MT5 SDK init triggers this). The health
-          # check below is the real readiness signal, so swallow the code.
-          & $nssm start $svc
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::warning ::nssm start exit=$LASTEXITCODE (likely SERVICE_START_PENDING); deferring to /health"
-            $global:LASTEXITCODE = 0
-          }
-
-          $health = '${{ steps.cfg.outputs.backend_health }}'
-          $ok = $false
-          for ($i=0; $i -lt 20; $i++) {
-            Start-Sleep -Seconds 2
-            try {
-              $r = Invoke-WebRequest $health -UseBasicParsing -TimeoutSec 3
-              if ($r.StatusCode -eq 200) { $ok = $true; break }
-            } catch { }
-          }
-          if (-not $ok) {
-            if ($first) { throw "first install: backend /health failed - check $root\data\nssm-err.log" }
-            Write-Host "Backend /health failed - rolling back"
-            try {
-              & $nssm stop $svc 2>$null | Out-Null
-            } catch {
-              Write-Host "NSSM stop skipped during rollback: $($_.Exception.Message)"
-            }
-            $bkExe = Join-Path $root "releases\$tag-prev\ReportTool.exe"
-            if (Test-Path $bkExe) {
-              Copy-Item $bkExe (Join-Path $root 'ReportTool.exe') -Force
-              & $nssm start $svc
-              if ($LASTEXITCODE -ne 0) { $global:LASTEXITCODE = 0 }
-            }
-            throw "backend deploy rolled back"
-          }
-          Write-Host "Backend OK ($svc): $tag @ $health"
-
-          # Prune backups
-          $rel = Join-Path $root 'releases'
-          if (Test-Path $rel) {
-            Get-ChildItem $rel -Directory | Sort-Object LastWriteTime -Descending | Select-Object -Skip 5 | Remove-Item -Recurse -Force
-          }
-
-      - name: Take down legacy WSL Docker frontend (best effort)
-        shell: powershell
-        run: |
-          # Old workflow ran the SPA in a WSL Docker container. Native nginx now
-          # owns the same port — remove any leftover container so the listener
-          # frees up cleanly on first migration. Subsequent runs are no-ops.
-          $cname = "reporttool-ui$( if ('${{ steps.cfg.outputs.instance }}' -eq 'default') { '' } else { '-${{ steps.cfg.outputs.instance }}' })"
-          try {
-            wsl -d Ubuntu-22.04 -u halit -- bash -lc "docker rm -f '$cname' >/dev/null 2>&1 || true"
-          } catch {
-            Write-Host "WSL docker cleanup skipped: $($_.Exception.Message)"
-          }
-
-      - name: Deploy frontend (native nginx)
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $instance  = '${{ steps.cfg.outputs.instance }}'
-          $siteDir   = '${{ steps.cfg.outputs.site_dir }}'
-          $confPath  = '${{ steps.cfg.outputs.nginx_conf }}'
-          $bePort    = [int]'${{ steps.cfg.outputs.backend_port }}'
-          $fePort    = [int]'${{ steps.cfg.outputs.frontend_port }}'
-          $nginxExe  = Join-Path $env:NGINX_DIR 'nginx.exe'
-          $distSrc   = Join-Path $env:GITHUB_WORKSPACE 'frontend\dist'
+          $exeSrc   = '${{ steps.art.outputs.exe }}'
+          $exeDir   = '${{ steps.art.outputs.exedir }}'
+          $distSrc  = Join-Path $env:GITHUB_WORKSPACE 'frontend\dist'
+          $nginxExe = Join-Path $env:NGINX_DIR 'nginx.exe'
+          $tmplPath = Join-Path $env:GITHUB_WORKSPACE 'frontend\nginx.template.conf'
 
           if (-not (Test-Path $distSrc)) { throw "frontend dist missing: $distSrc" }
-
-          New-Item -ItemType Directory -Path $siteDir -Force | Out-Null
-          $distDst = Join-Path $siteDir 'dist'
-          $distNew = Join-Path $siteDir 'dist.new'
-          $distBak = Join-Path $siteDir 'dist.bak'
-          if (Test-Path $distNew) { Remove-Item $distNew -Recurse -Force }
-          if (Test-Path $distBak) { Remove-Item $distBak -Recurse -Force }
-
-          # Stage new dist, then swap atomically. Keep .bak for rollback.
-          Copy-Item $distSrc $distNew -Recurse -Force
-          if (Test-Path $distDst) { Move-Item $distDst $distBak -Force }
-          Move-Item $distNew $distDst -Force
-
-          # Render nginx site conf from template (forward slashes for nginx root)
-          $tmplPath = Join-Path $env:GITHUB_WORKSPACE 'frontend\nginx.template.conf'
           if (-not (Test-Path $tmplPath)) { throw "nginx template missing: $tmplPath" }
-          $rootDir = $distDst -replace '\\','/'
-          $confText = (Get-Content $tmplPath -Raw) `
-            -replace '\{\{FRONTEND_PORT\}\}', $fePort `
-            -replace '\{\{BACKEND_PORT\}\}',  $bePort `
-            -replace '\{\{ROOT_DIR\}\}',      $rootDir
-          [System.IO.File]::WriteAllText($confPath, $confText)
 
-          # Validate before reloading; bail (and rollback) on syntax errors.
-          & $nginxExe -p "$env:NGINX_DIR\" -t
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "nginx -t failed - rolling back"
-            Remove-Item $confPath -Force -ErrorAction SilentlyContinue
-            if (Test-Path $distBak) {
-              Remove-Item $distDst -Recurse -Force
-              Move-Item $distBak $distDst -Force
-            }
-            throw "nginx config test failed"
+          $deployJson = @'
+          ${{ steps.cfg.outputs.deploy_list }}
+          '@
+          $tenants = $deployJson | ConvertFrom-Json
+          if ($tenants -isnot [array]) { $tenants = @($tenants) }
+          $tag = "$(Get-Date -Format yyyyMMdd-HHmmss)-$($env:GITHUB_SHA.Substring(0,7))"
+
+          $deployed = @()
+          foreach ($t in $tenants) {
+             $instance = [string]$t.instance
+             $offset   = [int]$t.port_offset
+             $suffix   = if ($instance -eq 'default') { '' } else { "-$instance" }
+             $root     = "C:\ReportTool$suffix"
+             $svc      = "ReportTool$suffix"
+             $siteName = "reporttool-$instance"
+             $siteDir  = "$env:SITES_ROOT\$siteName"
+             $confPath = "$env:NGINX_DIR\conf\conf.d\$siteName.conf"
+             $bePort   = 5151 + $offset
+             $fePort   = 8080 + $offset
+             $beHealth = "http://127.0.0.1:$bePort/health"
+             $feHealth = "http://127.0.0.1:$fePort/health"
+             $nssm     = Join-Path $root 'bin\nssm.exe'
+
+             Write-Host "=============================================================="
+             Write-Host "===== Tenant '$instance' (root=$root, be=$bePort, fe=$fePort)"
+             Write-Host "=============================================================="
+
+             if (-not (Test-Path $root)) {
+                throw "[$instance] install root missing: $root — run workflow_dispatch with instance=$instance and first_time_install=true to bootstrap"
+             }
+
+             #--- Backend deploy --------------------------------------------
+             try { & $nssm stop $svc 2>$null | Out-Null }
+             catch { Write-Host "[$instance] nssm stop skipped: $($_.Exception.Message)" }
+
+             $bk = Join-Path $root "releases\$tag-prev"
+             New-Item -ItemType Directory -Path $bk -Force | Out-Null
+             $curExe = Join-Path $root 'ReportTool.exe'
+             if (Test-Path $curExe) { Copy-Item $curExe (Join-Path $bk 'ReportTool.exe') -Force }
+
+             Copy-Item $exeSrc $curExe -Force
+
+             #--- MT5 DLL: prefer build-output sibling, else fallback.
+             $dllDest  = Join-Path $root 'MT5APIManager64.dll'
+             $dllBuild = Join-Path $exeDir 'MT5APIManager64.dll'
+             if (-not (Test-Path $dllDest)) {
+                if      (Test-Path $dllBuild)            { Copy-Item $dllBuild $dllDest -Force }
+                elseif  (Test-Path $env:MT5_DLL_SOURCE)  { Copy-Item $env:MT5_DLL_SOURCE $dllDest -Force }
+             }
+
+             & $nssm start $svc
+             if ($LASTEXITCODE -ne 0) {
+                Write-Host "::warning ::[$instance] nssm start exit=$LASTEXITCODE (likely SERVICE_START_PENDING); deferring to /health"
+                $global:LASTEXITCODE = 0
+             }
+
+             $ok = $false
+             for ($i = 0; $i -lt 20; $i++) {
+                Start-Sleep -Seconds 2
+                try {
+                   $r = Invoke-WebRequest $beHealth -UseBasicParsing -TimeoutSec 3
+                   if ($r.StatusCode -eq 200) { $ok = $true; break }
+                } catch { }
+             }
+             if (-not $ok) {
+                Write-Host "[$instance] backend /health failed — rolling back"
+                try { & $nssm stop $svc 2>$null | Out-Null } catch { }
+                $bkExe = Join-Path $bk 'ReportTool.exe'
+                if (Test-Path $bkExe) {
+                   Copy-Item $bkExe $curExe -Force
+                   & $nssm start $svc
+                   if ($LASTEXITCODE -ne 0) { $global:LASTEXITCODE = 0 }
+                }
+                throw "[$instance] backend deploy rolled back"
+             }
+             Write-Host "[$instance] Backend OK ($svc): $tag @ $beHealth"
+
+             #--- Prune old backups (keep last 5).
+             $rel = Join-Path $root 'releases'
+             if (Test-Path $rel) {
+                Get-ChildItem $rel -Directory |
+                  Sort-Object LastWriteTime -Descending |
+                  Select-Object -Skip 5 |
+                  Remove-Item -Recurse -Force
+             }
+
+             #--- Frontend deploy -------------------------------------------
+             New-Item -ItemType Directory -Path $siteDir -Force | Out-Null
+             $distDst = Join-Path $siteDir 'dist'
+             $distNew = Join-Path $siteDir 'dist.new'
+             $distBak = Join-Path $siteDir 'dist.bak'
+             if (Test-Path $distNew) { Remove-Item $distNew -Recurse -Force }
+             if (Test-Path $distBak) { Remove-Item $distBak -Recurse -Force }
+
+             Copy-Item $distSrc $distNew -Recurse -Force
+             if (Test-Path $distDst) { Move-Item $distDst $distBak -Force }
+             Move-Item $distNew $distDst -Force
+
+             $rootDir = $distDst -replace '\\','/'
+             $confText = (Get-Content $tmplPath -Raw) `
+                -replace '\{\{FRONTEND_PORT\}\}', $fePort `
+                -replace '\{\{BACKEND_PORT\}\}',  $bePort `
+                -replace '\{\{ROOT_DIR\}\}',      $rootDir
+             [System.IO.File]::WriteAllText($confPath, $confText)
+
+             & $nginxExe -p "$env:NGINX_DIR\" -t
+             if ($LASTEXITCODE -ne 0) {
+                Write-Host "[$instance] nginx -t failed — rolling back"
+                Remove-Item $confPath -Force -ErrorAction SilentlyContinue
+                if (Test-Path $distBak) {
+                   Remove-Item $distDst -Recurse -Force
+                   Move-Item $distBak $distDst -Force
+                }
+                throw "[$instance] nginx config test failed"
+             }
+
+             & $nginxExe -p "$env:NGINX_DIR\" -s reload
+             if ($LASTEXITCODE -ne 0) {
+                Write-Host "[$instance] nginx -s reload failed, restarting service"
+                & $env:NSSM restart $env:NGINX_SVC
+                if ($LASTEXITCODE -ne 0) { $global:LASTEXITCODE = 0 }
+             }
+
+             $ok = $false
+             for ($i = 0; $i -lt 20; $i++) {
+                Start-Sleep -Seconds 2
+                try {
+                   $r = Invoke-WebRequest $feHealth -UseBasicParsing -TimeoutSec 3
+                   if ($r.StatusCode -eq 200) { $ok = $true; break }
+                } catch { }
+             }
+             if (-not $ok) {
+                Write-Host "[$instance] frontend /health failed — rolling back dist + conf"
+                Remove-Item $confPath -Force -ErrorAction SilentlyContinue
+                if (Test-Path $distBak) {
+                   Remove-Item $distDst -Recurse -Force
+                   Move-Item $distBak $distDst -Force
+                }
+                & $nginxExe -p "$env:NGINX_DIR\" -s reload 2>$null
+                throw "[$instance] frontend health failed ($feHealth)"
+             }
+             if (Test-Path $distBak) { Remove-Item $distBak -Recurse -Force }
+             Write-Host "[$instance] Frontend OK (@ :$fePort)"
+
+             $deployed += "$instance (be=$bePort, fe=$fePort)"
           }
 
-          # Graceful reload (no dropped connections). Fall back to service restart
-          # if the signal pipe is wedged (rare, but happens after a crash).
-          & $nginxExe -p "$env:NGINX_DIR\" -s reload
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "nginx -s reload failed, restarting service"
-            & $env:NSSM restart $env:NGINX_SVC
-            # nssm restart can return non-zero on slow startup; health check below is the real signal
-            if ($LASTEXITCODE -ne 0) { $global:LASTEXITCODE = 0 }
-          }
-
-          $health = '${{ steps.cfg.outputs.frontend_health }}'
-          $ok = $false
-          for ($i=0; $i -lt 20; $i++) {
-            Start-Sleep -Seconds 2
-            try {
-              $r = Invoke-WebRequest $health -UseBasicParsing -TimeoutSec 3
-              if ($r.StatusCode -eq 200) { $ok = $true; break }
-            } catch { }
-          }
-          if (-not $ok) {
-            Write-Host "Frontend /health failed - rolling back dist + conf"
-            Remove-Item $confPath -Force -ErrorAction SilentlyContinue
-            if (Test-Path $distBak) {
-              Remove-Item $distDst -Recurse -Force
-              Move-Item $distBak $distDst -Force
-            }
-            & $nginxExe -p "$env:NGINX_DIR\" -s reload 2>$null
-            throw "frontend health failed ($health)"
-          }
-
-          if (Test-Path $distBak) { Remove-Item $distBak -Recurse -Force }
-          Write-Host "Frontend OK ($instance @ :$fePort)"
+          Write-Host ""
+          Write-Host "Deployed $($deployed.Count) tenant(s):"
+          $deployed | ForEach-Object { Write-Host "  - $_" }
 
       - name: Summary
         if: always()
         shell: powershell
         run: |
-          @"
-          ## Deploy result
-          - instance: ``${{ steps.cfg.outputs.instance }}``
-          - first_time_install: ``${{ steps.cfg.outputs.first_install }}``
-          - service: ``${{ steps.cfg.outputs.service_name }}``
-          - install root: ``${{ steps.cfg.outputs.install_root }}``
-          - site dir: ``${{ steps.cfg.outputs.site_dir }}``
-          - nginx conf: ``${{ steps.cfg.outputs.nginx_conf }}``
-          - backend:  ${{ steps.cfg.outputs.backend_health }}
-          - frontend: ${{ steps.cfg.outputs.frontend_health }}
-          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+          $deployJson = @'
+          ${{ steps.cfg.outputs.deploy_list }}
+          '@
+          $list = @()
+          try {
+             $tenants = $deployJson | ConvertFrom-Json
+             if ($tenants -isnot [array]) { $tenants = @($tenants) }
+             foreach ($t in $tenants) {
+                $i = $t.instance
+                $o = [int]$t.port_offset
+                $list += "- ``$i`` (be=http://127.0.0.1:$([int]$o + 5151)/health, fe=http://127.0.0.1:$([int]$o + 8080)/health)"
+             }
+          } catch { $list = @('- (could not parse tenant list)') }
+
+          $lines = @(
+             '## Deploy result',
+             "- tenants deployed: ``$($list.Count)``",
+             "- first_time_install: ``${{ steps.cfg.outputs.first_install }}``",
+             ''
+          ) + $list
+          $lines -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
