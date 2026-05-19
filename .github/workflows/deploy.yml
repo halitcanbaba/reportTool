@@ -22,6 +22,7 @@ on:
         options:
           - all
           - default
+          - trive
       first_time_install:
         description: 'İlk kurulum (install root + service oluştur, server.json render, backup atla). instance + port_offset zorunlu.'
         type: boolean
