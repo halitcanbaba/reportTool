@@ -399,7 +399,7 @@ struct ExprNode
 struct ColumnSpec
 {
    enum class Kind   { Identifier, Formula };
-   enum class Format { Money, Pct, Int, Text, Date };
+   enum class Format { Money, Pct, Int, Text, Date, Number };
 
    std::string key;     // stable id used by sort_json
    std::string label;   // header text

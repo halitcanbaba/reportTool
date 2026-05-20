@@ -21,6 +21,19 @@ function predicateSourceFor(source: string | undefined): 'user' | 'deal' {
   return 'user';
 }
 
+//--- Map a field's `return_type` to a sensible default `ColumnFormat` when
+//--- the user picks a new source via the FieldPicker. Without this, picking
+//--- e.g. `login` (return_type='int') on a default-text column saved the
+//--- column as text and Excel exports looked like "8921.00" once CSV used
+//--- money format. User can still override via the format <select>.
+function formatForReturnType(rt: FieldDef['return_type']): ColumnFormat {
+  if (rt === 'int')   return 'int';
+  if (rt === 'money') return 'money';
+  if (rt === 'pct')   return 'pct';
+  if (rt === 'date')  return 'date';
+  return 'text';
+}
+
 function countPredicate(p: Predicate | null | undefined): number {
   if(!p) return 0;
   if(p.kind === 'cmp') return 1;
@@ -373,6 +386,7 @@ export function TemplateDesignerPage() {
                           value={c.format}
                           onChange={e => updateColumn(idx, { format: e.target.value as ColumnFormat })}>
                     <option value="money">money</option>
+                    <option value="number">number</option>
                     <option value="pct">pct</option>
                     <option value="int">int</option>
                     <option value="text">text</option>
@@ -399,7 +413,12 @@ export function TemplateDesignerPage() {
                         catalog={catalog}
                         filter={f => f.arity === 0 && (f.is_identifier || f.source === 'user' || f.source === 'deal')}
                         placeholder="change…"
-                        onPick={f => updateColumn(idx, { source: f.name })}
+                        onPick={f => updateColumn(idx, {
+                          source: f.name,
+                          //--- Align column.format to the field's return_type so
+                          //--- login (int) doesn't surface as "8921.00" in Excel.
+                          format: formatForReturnType(f.return_type),
+                        })}
                       />
                       <label className="ml-auto inline-flex items-center gap-1.5 text-xs cursor-pointer select-none"
                              title="When on, this column contributes to the row bucket key">

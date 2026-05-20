@@ -55,20 +55,22 @@ namespace
    {
       switch(f)
       {
-         case ColumnSpec::Format::Money: return "money";
-         case ColumnSpec::Format::Pct:   return "pct";
-         case ColumnSpec::Format::Int:   return "int";
-         case ColumnSpec::Format::Text:  return "text";
-         case ColumnSpec::Format::Date:  return "date";
+         case ColumnSpec::Format::Money:  return "money";
+         case ColumnSpec::Format::Pct:    return "pct";
+         case ColumnSpec::Format::Int:    return "int";
+         case ColumnSpec::Format::Text:   return "text";
+         case ColumnSpec::Format::Date:   return "date";
+         case ColumnSpec::Format::Number: return "number";
       }
       return "money";
    }
    ColumnSpec::Format FormatFromStr(const std::string& s)
    {
-      if(s == "pct")  return ColumnSpec::Format::Pct;
-      if(s == "int")  return ColumnSpec::Format::Int;
-      if(s == "text") return ColumnSpec::Format::Text;
-      if(s == "date") return ColumnSpec::Format::Date;
+      if(s == "pct")    return ColumnSpec::Format::Pct;
+      if(s == "int")    return ColumnSpec::Format::Int;
+      if(s == "text")   return ColumnSpec::Format::Text;
+      if(s == "date")   return ColumnSpec::Format::Date;
+      if(s == "number") return ColumnSpec::Format::Number;
       return ColumnSpec::Format::Money;
    }
 }

@@ -4,7 +4,7 @@
 //| import() so the initial bundle stays small.                       |
 //+------------------------------------------------------------------+
 import type { ResultPreview } from '../types';
-import { fmtMoney, fmtPct, fmtInt, fmtDate } from '../utils/format';
+import { fmtMoney, fmtNumber, fmtPct, fmtInt, fmtDate } from '../utils/format';
 import { ReportsAPI } from '../api/reports';
 
 //--- Format one preview cell the same way the on-screen table does, so the
@@ -13,11 +13,12 @@ function fmtCell(v: number | string | null, fmt: string): string {
   if (v == null) return '';
   if (typeof v === 'string') return v;
   switch (fmt) {
-    case 'money': return fmtMoney(v);
-    case 'pct':   return fmtPct(v);
-    case 'int':   return fmtInt(v);
-    case 'date':  return fmtDate(v);
-    default:      return String(v);
+    case 'money':  return fmtMoney(v);
+    case 'number': return fmtNumber(v);
+    case 'pct':    return fmtPct(v);
+    case 'int':    return fmtInt(v);
+    case 'date':   return fmtDate(v);
+    default:       return String(v);
   }
 }
 
@@ -63,7 +64,13 @@ export async function toXlsxBlob(preview: ResultPreview, jobId: number, sheetNam
         return;
       }
       const n = Number(raw);
-      out.push(Number.isFinite(n) ? n : 0);
+      if (!Number.isFinite(n)) { out.push(0); return; }
+      //--- For `int` columns push a rounded integer (no trailing .00). Excel
+      //--- still renders this as a number cell, but with the "General" format
+      //--- instead of inheriting "2dp" from siblings — login no longer shows
+      //--- up as 8921.00.
+      if (c.format === 'int') { out.push(Math.round(n)); return; }
+      out.push(n);
     });
     aoa.push(out);
   }

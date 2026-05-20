@@ -156,7 +156,11 @@ export type FieldCatalog = {
 //--- Template column + sort ---------------------------------------
 
 export type ColumnKind   = 'identifier' | 'formula';
-export type ColumnFormat = 'money' | 'pct' | 'int' | 'text' | 'date';
+//--- 'number' renders decimals with locale thousand separators and NO
+//--- currency sign, e.g. 1,234.56. Distinct from 'money' (prepends $) and
+//--- 'int' (drops decimals). Use for lots, exposure as a raw figure,
+//--- ratios, custom formulas where the $ symbol is unwanted.
+export type ColumnFormat = 'money' | 'pct' | 'int' | 'text' | 'date' | 'number';
 
 export type Column = {
   key:    string;

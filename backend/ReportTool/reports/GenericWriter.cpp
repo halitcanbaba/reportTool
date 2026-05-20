@@ -15,9 +15,10 @@ namespace
    {
       switch(f)
       {
-         case ColumnSpec::Format::Money: return 2;
-         case ColumnSpec::Format::Pct:   return 2;
-         case ColumnSpec::Format::Int:   return 0;
+         case ColumnSpec::Format::Money:  return 2;
+         case ColumnSpec::Format::Pct:    return 2;
+         case ColumnSpec::Format::Int:    return 0;
+         case ColumnSpec::Format::Number: return 2;
          default: return 2;
       }
    }

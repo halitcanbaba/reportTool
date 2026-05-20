@@ -6,7 +6,7 @@ import { SettingsAPI } from '../api/settings';
 import { useAuth } from '../contexts/AuthContext';
 import { StatusPill } from '../components/StatusPill';
 import { Breadcrumbs } from '../components/Breadcrumbs';
-import { fmtDateTime, fmtMoney, fmtPct, fmtInt, fmtDate } from '../utils/format';
+import { fmtDateTime, fmtMoney, fmtNumber, fmtPct, fmtInt, fmtDate } from '../utils/format';
 import {
   toXlsxBlob, toPdfBlob, toScreenshotBlob, fetchCsvBlob,
   buildTextSummary, safeBaseName,
@@ -17,11 +17,12 @@ const fmtCell = (v: number | string | null, fmt: string): string => {
   if (v == null) return '';
   if (typeof v === 'string') return v;
   switch (fmt) {
-    case 'money': return fmtMoney(v);
-    case 'pct':   return fmtPct(v);
-    case 'int':   return fmtInt(v);
-    case 'date':  return fmtDate(v);
-    default:      return String(v);
+    case 'money':  return fmtMoney(v);
+    case 'number': return fmtNumber(v);
+    case 'pct':    return fmtPct(v);
+    case 'int':    return fmtInt(v);
+    case 'date':   return fmtDate(v);
+    default:       return String(v);
   }
 };
 
