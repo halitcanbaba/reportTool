@@ -108,11 +108,17 @@ namespace
       catch(const std::exception&) { return GenericWriter::Cell::N(); }
    }
 
-   //--- Compare two cells for sort. Direction handled by caller.
-   bool CellLess(const GenericWriter::Cell& a, const GenericWriter::Cell& b)
+   //--- Compare two cells for sort. Direction handled by caller. When
+   //--- `abs_value` is true and both cells are numeric, the comparison is on
+   //--- |x| instead of x — used by the explicit-sort path when the template's
+   //--- `sort.abs_value` flag is on. The default-pivot-sort path passes false.
+   bool CellLess(const GenericWriter::Cell& a, const GenericWriter::Cell& b, bool abs_value = false)
    {
       if(a.kind == GenericWriter::Cell::Kind::Number && b.kind == GenericWriter::Cell::Kind::Number)
+      {
+         if(abs_value) return std::fabs(a.number) < std::fabs(b.number);
          return a.number < b.number;
+      }
       const std::string& sa = a.text;
       const std::string& sb = b.text;
       return sa < sb;
@@ -1180,12 +1186,13 @@ void Engine::Run(AppContext& ctx, int64_t job_id)
          if(tpl.columns[i].key == tpl.sort.column_key) { sort_idx = (int)i; break; }
       if(sort_idx >= 0)
       {
-         const bool desc = tpl.sort.descending;
+         const bool desc      = tpl.sort.descending;
+         const bool abs_value = tpl.sort.abs_value;
          std::sort(rows.begin(), rows.end(),
-            [sort_idx, desc](const auto& a, const auto& b) {
+            [sort_idx, desc, abs_value](const auto& a, const auto& b) {
                const auto& ca = (size_t)sort_idx < a.size() ? a[sort_idx] : GenericWriter::Cell::N();
                const auto& cb = (size_t)sort_idx < b.size() ? b[sort_idx] : GenericWriter::Cell::N();
-               return desc ? CellLess(cb, ca) : CellLess(ca, cb);
+               return desc ? CellLess(cb, ca, abs_value) : CellLess(ca, cb, abs_value);
             });
       }
    }

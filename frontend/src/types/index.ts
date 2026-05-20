@@ -180,6 +180,10 @@ export type Column = {
 export type SortSpec = {
   column_key: string;
   direction:  'asc' | 'desc';
+  //--- Sort by |x| (absolute value) for numeric columns. Orthogonal to
+  //--- direction: desc+abs = biggest magnitude on top, asc+abs = rows
+  //--- nearest zero on top. Ignored for text cells.
+  abs?:       boolean;
 };
 
 export type Template = {

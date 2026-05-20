@@ -431,6 +431,11 @@ struct SortSpec
 {
    std::string column_key;
    bool        descending = true;
+   //--- When true and the sort column resolves to a numeric cell, rows are
+   //--- ordered by |x| instead of x. Combined with `descending`: desc+abs
+   //--- = biggest magnitude on top (big winners + losers cluster); asc+abs
+   //--- = rows nearest zero on top. Ignored for text cells.
+   bool        abs_value  = false;
 };
 
 //--- Saved formula building block (formula_blueprints table).

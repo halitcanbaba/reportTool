@@ -130,7 +130,11 @@ namespace
          { "row_model",     t.row_model },
          { "date_params",   dps },
          { "columns",       ColumnsToJson(t.columns) },
-         { "sort",          json{ {"column_key", t.sort.column_key}, {"direction", t.sort.descending ? "desc" : "asc"} } },
+         { "sort",          json{
+                                {"column_key", t.sort.column_key},
+                                {"direction",  t.sort.descending ? "desc" : "asc"},
+                                {"abs",        t.sort.abs_value},
+                             } },
          { "default_top_n", t.default_top_n },
          { "folder_id",     t.folder_id ? json(t.folder_id) : json(nullptr) },
          { "sort_order",    t.sort_order },
@@ -159,6 +163,8 @@ namespace
          {
             t->sort.column_key = j["sort"].value("column_key", "");
             t->sort.descending = j["sort"].value("direction", std::string("desc")) != "asc";
+            //--- Backward compat: absent `abs` defaults to false.
+            t->sort.abs_value  = j["sort"].value("abs", false);
          }
          t->default_top_n = j.value("default_top_n", 0u);
          //--- PATCH semantics: missing key leaves the existing folder_id intact;

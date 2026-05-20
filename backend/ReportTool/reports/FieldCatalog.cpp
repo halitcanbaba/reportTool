@@ -1097,6 +1097,31 @@ namespace
    bool PosSell(const PositionRow& p) { return p.action == IMTPosition::POSITION_SELL; }
    bool PosAny(const PositionRow&) { return true; }
 
+   //--- Position value helpers ------------------------------------------
+   //--- MT5 SDK doesn't expose a built-in "notional / exposure" field
+   //--- (`IMTPosition::ObsoleteValue()` is deprecated). We compute it from
+   //--- the components: lots * contract_size * current_price * rate_profit.
+   //--- `rate_profit` converts the symbol's profit currency to the broker's
+   //--- deposit currency, so the result is in deposit currency (USD on most
+   //--- ReportTool deployments).
+   double PosLots(const PositionRow& p) { return p.volume / 10000.0; }
+   double PosExposure(const PositionRow& p)
+   {
+      return PosLots(p) * p.contract_size * p.price_current * p.rate_profit;
+   }
+   //--- Signed variants for net-direction aggregates: BUY positive, SELL
+   //--- negative. Sign of the bucket sum = net long/short direction.
+   double PosLotsSigned(const PositionRow& p)
+   {
+      const double sign = (p.action == IMTPosition::POSITION_BUY) ? 1.0 : -1.0;
+      return sign * PosLots(p);
+   }
+   double PosExposureSigned(const PositionRow& p)
+   {
+      const double sign = (p.action == IMTPosition::POSITION_BUY) ? 1.0 : -1.0;
+      return sign * PosExposure(p);
+   }
+
    //--- One-time initialization of the catalog.
    void InitCatalog()
    {
@@ -1339,6 +1364,24 @@ namespace
       PosSum("position_volume_sell_sum",  "Σ Open SELL Volume",           "int",   PosSell, [](const PositionRow& p){ return (double)p.volume; });
       PosSum("position_profit_sum",       "Σ Open Position Profit",       "money", PosAny,  [](const PositionRow& p){ return p.profit; });
       PosSum("position_storage_sum",      "Σ Open Position Storage",      "money", PosAny,  [](const PositionRow& p){ return p.storage; });
+
+      //--- Lots (decimal). The existing `position_volume_*` aggregators sum
+      //--- the raw uint64 volume (lots * 10000), which is hard to read. These
+      //--- variants divide by 10000 so 0.5 lots reads as 0.5.
+      PosSum("position_lots_sum",         "Σ Lots (all)",                 "money", PosAny,  PosLots);
+      PosSum("position_lots_buy_sum",     "Σ Lots (BUY)",                 "money", PosBuy,  PosLots);
+      PosSum("position_lots_sell_sum",    "Σ Lots (SELL)",                "money", PosSell, PosLots);
+
+      //--- Exposure (notional value in deposit currency). MT5 SDK has no
+      //--- built-in exposure field; computed as lots * contract_size *
+      //--- price_current * rate_profit. Useful for "how much USD risk".
+      PosSum("position_exposure_usd",         "Σ Exposure (USD, all)",     "money", PosAny,  PosExposure);
+      PosSum("position_exposure_usd_buy",     "Σ Exposure (USD, BUY)",     "money", PosBuy,  PosExposure);
+      PosSum("position_exposure_usd_sell",    "Σ Exposure (USD, SELL)",    "money", PosSell, PosExposure);
+
+      //--- Net (BUY - SELL). Negative result = bucket is net short.
+      PosSum("position_net_lots",             "Σ Net Lots (BUY - SELL)",   "money", PosAny,  PosLotsSigned);
+      PosSum("position_net_exposure_usd",     "Σ Net Exposure (USD, BUY - SELL)", "money", PosAny, PosExposureSigned);
 
       //--- H : Open Orders -------------------------------------------
       {

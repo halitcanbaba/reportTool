@@ -483,6 +483,13 @@ export function TemplateDesignerPage() {
               <option value="desc">descending</option>
               <option value="asc">ascending</option>
             </select>
+            <label className="inline-flex items-center gap-1.5 text-xs cursor-pointer select-none"
+                   title="Sort by absolute value. Combined with direction: desc+abs = biggest magnitude on top.">
+              <input type="checkbox"
+                     checked={!!tpl.sort.abs}
+                     onChange={e => update('sort', { ...tpl.sort, abs: e.target.checked } as SortSpec)} />
+              <span className="text-ink-700">by |abs|</span>
+            </label>
           </div>
         </div>
       </div>

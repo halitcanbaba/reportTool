@@ -474,7 +474,11 @@ bool Expression::ColumnsFromJsonString(const std::string& s,
 
 std::string Expression::SortToJsonString(const SortSpec& s)
 {
-   return json{ {"column_key", s.column_key}, {"direction", s.descending ? "desc" : "asc"} }.dump();
+   return json{
+      {"column_key", s.column_key},
+      {"direction",  s.descending ? "desc" : "asc"},
+      {"abs",        s.abs_value},
+   }.dump();
 }
 
 bool Expression::SortFromJsonString(const std::string& s, SortSpec* out)
@@ -483,6 +487,8 @@ bool Expression::SortFromJsonString(const std::string& s, SortSpec* out)
    if(j.is_discarded() || !j.is_object()) return false;
    out->column_key = j.value("column_key", "");
    out->descending = j.value("direction", std::string("desc")) != "asc";
+   //--- Backward compat: older templates have no `abs` field, default false.
+   out->abs_value  = j.value("abs", false);
    return true;
 }
 
