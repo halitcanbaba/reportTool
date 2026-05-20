@@ -753,6 +753,63 @@ namespace
       Add(std::move(f));
    }
 
+   //--- Deal-source identity (text). Reads the bucket's first deal — meant
+   //--- for ticket pivot where each row has exactly one deal. Other pivots
+   //--- (login/symbol/group/...) collapse to a single arbitrary deal's value
+   //--- by design; the field label suffix "(ticket pivot)" hints at the
+   //--- intended use.
+   void DealId(const char* name, const char* label,
+               std::function<std::string(const DealRow&)> sel)
+   {
+      Field f;
+      f.name = name; f.label = label;
+      f.category = "A"; f.category_label = "Deal Identity (ticket pivot)";
+      f.source = Source::Deal; f.arity = 0;
+      f.return_type = "text";
+      auto cap = std::move(sel);
+      f.txt = [cap](const EvalContext& c) -> std::string {
+         if(!c.deals || c.deals->empty()) return std::string();
+         return cap(c.deals->front());
+      };
+      Add(std::move(f));
+   }
+
+   //--- Deal-source identity (numeric / date). Mirrors IdNumeric: registers
+   //--- BOTH num (for formula references and aggregate use) and txt (so the
+   //--- value renders as a string cell in identifier columns).
+   void DealIdNum(const char* name, const char* label, const char* return_type,
+                  std::function<double(const DealRow&)> sel)
+   {
+      Field f;
+      f.name = name; f.label = label;
+      f.category = "A"; f.category_label = "Deal Identity (ticket pivot)";
+      f.source = Source::Deal; f.arity = 0;
+      f.return_type = return_type;
+      auto cap = std::move(sel);
+      f.num = [cap](const std::vector<int64_t>&, const Predicate*, const EvalContext& c) -> double {
+         if(!c.deals || c.deals->empty()) return 0.0;
+         return cap(c.deals->front());
+      };
+      const std::string rt_s = return_type ? return_type : "";
+      f.txt = [cap, rt_s](const EvalContext& c) -> std::string {
+         if(!c.deals || c.deals->empty()) return std::string();
+         const double v = cap(c.deals->front());
+         if(rt_s == "date")
+         {
+            const time_t t = (time_t)v;
+            struct tm utc{}; gmtime_s(&utc, &t);
+            char b[32];
+            snprintf(b, sizeof(b), "%04d-%02d-%02d %02d:%02d:%02d",
+                     utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday,
+                     utc.tm_hour, utc.tm_min, utc.tm_sec);
+            return std::string(b);
+         }
+         char b[64]; snprintf(b, sizeof(b), "%g", v);
+         return std::string(b);
+      };
+      Add(std::move(f));
+   }
+
    //--- Returns true for return types that are naturally additive across
    //--- multiple bucket members. money + int sum cleanly; pct/date/text do
    //--- not (sum of percentages is meaningless), so we keep them at the
@@ -1084,6 +1141,36 @@ namespace
             return std::string(b);
          });
 
+      //--- A2 : Deal Identity (per-deal fields for ticket pivot) ------
+      //--- Each registration reads the bucket's first deal. Only meaningful
+      //--- on ticket pivot where every bucket has exactly one deal; on other
+      //--- pivots they collapse to an arbitrary deal's value (documented in
+      //--- the field category label).
+      DealId   ("deal_symbol",       "Deal Symbol",      [](const DealRow& d){ return d.symbol; });
+      DealId   ("deal_comment",      "Deal Comment",     [](const DealRow& d){ return d.comment; });
+      DealId   ("deal_external_id",  "Deal External ID", [](const DealRow& d){ return d.external_id; });
+      DealId   ("deal_gateway",      "Deal Gateway",     [](const DealRow& d){ return d.gateway; });
+      DealIdNum("deal_volume",       "Deal Volume",       "money", [](const DealRow& d){ return (double)d.volume; });
+      DealIdNum("deal_volume_ext",   "Deal Volume Ext",   "money", [](const DealRow& d){ return (double)d.volume_ext; });
+      DealIdNum("deal_volume_closed","Deal Volume Closed","money", [](const DealRow& d){ return (double)d.volume_closed; });
+      DealIdNum("deal_profit",       "Deal Profit",       "money", [](const DealRow& d){ return d.profit; });
+      DealIdNum("deal_profit_raw",   "Deal Profit Raw",   "money", [](const DealRow& d){ return d.profit_raw; });
+      DealIdNum("deal_commission",   "Deal Commission",   "money", [](const DealRow& d){ return d.commission; });
+      DealIdNum("deal_storage",      "Deal Storage",      "money", [](const DealRow& d){ return d.storage; });
+      DealIdNum("deal_fee",          "Deal Fee",          "money", [](const DealRow& d){ return d.fee; });
+      DealIdNum("deal_value",        "Deal Value",        "money", [](const DealRow& d){ return d.value; });
+      DealIdNum("deal_price",        "Deal Price",        "money", [](const DealRow& d){ return d.price; });
+      DealIdNum("deal_price_sl",     "Deal SL Price",     "money", [](const DealRow& d){ return d.price_sl; });
+      DealIdNum("deal_price_tp",     "Deal TP Price",     "money", [](const DealRow& d){ return d.price_tp; });
+      DealIdNum("deal_time",         "Deal Time",         "date",  [](const DealRow& d){ return (double)d.time; });
+      DealIdNum("deal_action",       "Deal Action",       "int",   [](const DealRow& d){ return (double)d.action; });
+      DealIdNum("deal_entry",        "Deal Entry",        "int",   [](const DealRow& d){ return (double)d.entry; });
+      DealIdNum("deal_reason",       "Deal Reason",       "int",   [](const DealRow& d){ return (double)d.reason; });
+      DealIdNum("deal_position_id",  "Deal Position ID",  "int",   [](const DealRow& d){ return (double)d.position_id; });
+      DealIdNum("deal_order_id",     "Deal Order ID",     "int",   [](const DealRow& d){ return (double)d.order; });
+      DealIdNum("deal_login",        "Deal Login",        "int",   [](const DealRow& d){ return (double)d.login; });
+      DealIdNum("deal_lifetime",     "Deal Lifetime (s)", "int",   [](const DealRow& d){ return (double)d.trade_lifetime_sec; });
+
       //--- B : User Static Numeric -----------------------------------
       UserNum("user_balance",                  "User Balance",          "money", [](const UserInfo& u){ return u.balance; });
       UserNum("user_credit",                   "User Credit",           "money", [](const UserInfo& u){ return u.credit; });
@@ -1185,6 +1272,15 @@ namespace
       DealActionField("sum_dividend",            "Σ Dividend (DEAL_DIVIDEND)",               IMTDeal::DEAL_DIVIDEND,           /*abs*/false);
       DealActionField("sum_dividend_franked",    "Σ Dividend franked (DEAL_DIVIDEND_FRANKED)", IMTDeal::DEAL_DIVIDEND_FRANKED, /*abs*/false);
       DealActionField("sum_tax",                 "Σ Tax (DEAL_TAX)",                         IMTDeal::DEAL_TAX,                /*abs*/false);
+      //--- Stop-out compensation: when a margin-call stop-out closes a
+      //--- position with negative balance, the broker books a balance-side
+      //--- top-up so the user's equity returns to 0 (negative-balance
+      //--- protection). DEAL_SO_COMPENSATION_CREDIT is the same idea but
+      //--- credited from a credit account instead of cash.
+      DealActionField("sum_so_compensation",        "Σ Stop-out compensation (DEAL_SO_COMPENSATION)",        IMTDeal::DEAL_SO_COMPENSATION,        /*abs*/false);
+      DealActionField("sum_so_compensation_abs",    "Σ |Stop-out compensation|",                            IMTDeal::DEAL_SO_COMPENSATION,        /*abs*/true);
+      DealActionField("sum_so_compensation_credit", "Σ Stop-out comp. credit (DEAL_SO_COMPENSATION_CREDIT)", IMTDeal::DEAL_SO_COMPENSATION_CREDIT, /*abs*/false);
+      DealActionField("sum_agent",                  "Σ Agent commission (DEAL_AGENT, instant)",              IMTDeal::DEAL_AGENT,                  /*abs*/false);
 
       DealActionCnt  ("count_balance",           "# DEAL_BALANCE rows",                      IMTDeal::DEAL_BALANCE);
       DealActionCnt  ("count_credit",            "# DEAL_CREDIT rows",                       IMTDeal::DEAL_CREDIT);
@@ -1193,6 +1289,9 @@ namespace
       DealActionCnt  ("count_bonus",             "# DEAL_BONUS rows",                        IMTDeal::DEAL_BONUS);
       DealActionCnt  ("count_dividend",          "# DEAL_DIVIDEND rows",                     IMTDeal::DEAL_DIVIDEND);
       DealActionCnt  ("count_tax",               "# DEAL_TAX rows",                          IMTDeal::DEAL_TAX);
+      DealActionCnt  ("count_so_compensation",        "# DEAL_SO_COMPENSATION rows",        IMTDeal::DEAL_SO_COMPENSATION);
+      DealActionCnt  ("count_so_compensation_credit", "# DEAL_SO_COMPENSATION_CREDIT rows", IMTDeal::DEAL_SO_COMPENSATION_CREDIT);
+      DealActionCnt  ("count_agent",                  "# DEAL_AGENT rows (instant)",        IMTDeal::DEAL_AGENT);
       //--- Closed-trade sums
       TradeRangeS("sum_closed_pl",   "Σ Closed P/L",      "money", [](const DealRow& d){ return d.profit; });
       TradeRangeS("sum_profit_raw",  "Σ Profit Raw",      "money", [](const DealRow& d){ return d.profit_raw; });
@@ -1562,6 +1661,7 @@ namespace
          {9, "COMMISSION_MONTHLY"}, {10, "AGENT_DAILY"}, {11, "AGENT_MONTHLY"},
          {12, "INTEREST_RATE"}, {13, "BUY_CANCELED"}, {14, "SELL_CANCELED"}, {15, "DIVIDEND"},
          {16, "DIVIDEND_FRANKED"}, {17, "TAX"}, {18, "AGENT"}, {19, "SO_COMPENSATION"},
+         {20, "SO_COMPENSATION_CREDIT"},
       }});
       deal.push_back({"entry", "Entry", VT::Enum, {
          {0, "IN"}, {1, "OUT"}, {2, "INOUT"}, {3, "OUT_BY"},
