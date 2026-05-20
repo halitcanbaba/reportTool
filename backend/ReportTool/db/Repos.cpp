@@ -1184,14 +1184,17 @@ namespace
 
    void FillUser(SqliteStmt& st, User& u)
    {
-      u.id            = st.ColI64(0);
-      u.username      = st.ColText(1);
-      u.password_hash = st.ColText(2);
-      u.role          = st.ColText(3);
-      u.active        = st.ColInt(4) != 0;
-      u.created_at    = st.ColI64(5);
-      u.updated_at    = st.ColI64(6);
-      u.last_login_at = st.ColI64(7);
+      u.id             = st.ColI64(0);
+      u.username       = st.ColText(1);
+      u.password_hash  = st.ColText(2);
+      u.role           = st.ColText(3);
+      u.active         = st.ColInt(4) != 0;
+      u.created_at     = st.ColI64(5);
+      u.updated_at     = st.ColI64(6);
+      //--- DB column is `last_login_at` (legacy name), mapped to the renamed
+      //--- struct field `last_active_at` — the value is now touched on every
+      //--- authenticated request (see HttpServer.cpp pre-routing handler).
+      u.last_active_at = st.ColI64(7);
    }
 }
 
@@ -1268,8 +1271,11 @@ bool UserRepo::UpdatePassword(SqliteDb& db, int64_t id, const std::string& passw
    return true;
 }
 
-bool UserRepo::UpdateLastLogin(SqliteDb& db, int64_t id, int64_t when)
+bool UserRepo::UpdateLastActive(SqliteDb& db, int64_t id, int64_t when)
 {
+   //--- Stamps the (legacy-named) `last_login_at` column. Semantically this
+   //--- now tracks "last active timestamp" — see HttpServer.cpp's
+   //--- pre-routing handler for the per-user 60s throttle.
    std::lock_guard<std::mutex> lock(db.Mutex());
    SqliteStmt st(db, "UPDATE users SET last_login_at=? WHERE id=?");
    st.BindI64(1, when);

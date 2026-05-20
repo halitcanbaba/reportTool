@@ -58,7 +58,7 @@ export function UserListPage() {
                 <th className="px-4 py-3 text-left  font-medium text-ink-600 uppercase text-xs tracking-wide">Username</th>
                 <th className="px-4 py-3 text-left  font-medium text-ink-600 uppercase text-xs tracking-wide">Role</th>
                 <th className="px-4 py-3 text-left  font-medium text-ink-600 uppercase text-xs tracking-wide">Active</th>
-                <th className="px-4 py-3 text-left  font-medium text-ink-600 uppercase text-xs tracking-wide">Last login</th>
+                <th className="px-4 py-3 text-left  font-medium text-ink-600 uppercase text-xs tracking-wide">Last active</th>
                 <th className="px-4 py-3 text-left  font-medium text-ink-600 uppercase text-xs tracking-wide">Created</th>
                 <th className="px-4 py-3"></th>
               </tr>
@@ -79,7 +79,7 @@ export function UserListPage() {
                       {u.active ? 'active' : 'inactive'}
                     </label>
                   </td>
-                  <td className="px-4 py-3 text-xs text-ink-500">{u.last_login_at ? fmtDateTime(u.last_login_at) : <span className="text-ink-400">never</span>}</td>
+                  <td className="px-4 py-3 text-xs text-ink-500">{u.last_active_at ? fmtDateTime(u.last_active_at) : <span className="text-ink-400">never</span>}</td>
                   <td className="px-4 py-3 text-xs text-ink-500">{fmtDateTime(u.created_at)}</td>
                   <td className="px-4 py-3 text-right whitespace-nowrap">
                     <Link to={`/users/${u.id}/edit`} className="btn-secondary text-xs px-2 py-1 mr-2">Edit</Link>

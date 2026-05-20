@@ -9,7 +9,10 @@ export type AppUser = {
   active:        boolean;
   created_at:    number;
   updated_at:    number;
-  last_login_at: number;
+  //--- Last time the user made an authenticated request (throttled to once
+   //--- per minute in the server-side middleware). DB column is still named
+   //--- `last_login_at` for legacy reasons but the value tracks activity.
+  last_active_at: number;
 };
 
 export type LoginRequest = { username: string; password: string };

@@ -133,6 +133,20 @@ void HttpServer::RegisterCors()
 void HttpServer::RegisterAuthMiddleware()
 {
    AppContext* ctx = m_ctx;
+
+   //--- Per-user last-active throttle. Every authenticated request touches
+   //--- the user's `last_login_at` (legacy column name; semantically "last
+   //--- active") so the Users page can show actual usage instead of the
+   //--- one-shot login timestamp. To avoid one SQLite UPDATE per request,
+   //--- gate to once-per-60-seconds per user.
+   //---
+   //--- Shared across all request threads — guarded by its own mutex.
+   //--- Static-local + lambda capture-by-reference keeps the state alive
+   //--- for the lifetime of the http server.
+   static std::unordered_map<int64_t, int64_t> last_touch;
+   static std::mutex                            touch_mtx;
+   constexpr int64_t kTouchThrottleSec = 60;
+
    m_srv->set_pre_routing_handler(
       [ctx](const httplib::Request& req, httplib::Response& res) -> httplib::Server::HandlerResponse
       {
@@ -147,6 +161,27 @@ void HttpServer::RegisterAuthMiddleware()
 
          //--- Stash for route handlers.
          CurrentUser::Set(pair->first, pair->second.token);
+
+         //--- Touch last-active (throttled). Done after auth succeeds so we
+         //--- only mark genuine activity, not anonymous probes.
+         {
+            const int64_t now = (int64_t)time(nullptr);
+            const int64_t uid = pair->first.id;
+            bool needs_write = false;
+            {
+               std::lock_guard<std::mutex> lk(touch_mtx);
+               const auto it = last_touch.find(uid);
+               if(it == last_touch.end() || (now - it->second) >= kTouchThrottleSec)
+               {
+                  last_touch[uid] = now;
+                  needs_write = true;
+               }
+            }
+            if(needs_write && ctx->db)
+            {
+               UserRepo::UpdateLastActive(*ctx->db, uid, now);
+            }
+         }
 
          if(RequiresAdmin(req) && pair->first.role != "admin")
          {

@@ -120,7 +120,10 @@ namespace UserRepo
    int64_t                     Insert(SqliteDb& db, User& u);
    bool                        UpdateRoleActive(SqliteDb& db, int64_t id, const std::string& role, bool active);
    bool                        UpdatePassword(SqliteDb& db, int64_t id, const std::string& password_hash);
-   bool                        UpdateLastLogin(SqliteDb& db, int64_t id, int64_t when);
+   //--- Stamps users.last_login_at (column name is legacy; semantically
+   //--- "last active"). Called by the HTTP pre-routing handler with a 60s
+   //--- per-user throttle, and on successful login as a fresh touch.
+   bool                        UpdateLastActive(SqliteDb& db, int64_t id, int64_t when);
    bool                        Delete(SqliteDb& db, int64_t id);
    int64_t                     Count(SqliteDb& db);
    int64_t                     CountActiveAdmins(SqliteDb& db);

@@ -29,7 +29,7 @@ namespace
          { "active",        u.active },
          { "created_at",    u.created_at },
          { "updated_at",    u.updated_at },
-         { "last_login_at", u.last_login_at },
+         { "last_active_at", u.last_active_at },
       };
    }
 

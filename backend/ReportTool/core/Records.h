@@ -575,7 +575,11 @@ struct User
    bool         active        = true;
    int64_t      created_at    = 0;
    int64_t      updated_at    = 0;
-   int64_t      last_login_at = 0;
+   //--- DB column name is still `last_login_at` (no schema migration), but
+   //--- the value is touched on every authenticated request (throttled to
+   //--- once per 60s per user) — i.e. semantically "last active". The
+   //--- API + UI surface this as `last_active_at` / "Last Active".
+   int64_t      last_active_at = 0;
 };
 
 //--- Active HTTP session bound to a user (sessions table).

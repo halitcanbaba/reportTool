@@ -29,7 +29,7 @@ namespace
          { "active",        u.active },
          { "created_at",    u.created_at },
          { "updated_at",    u.updated_at },
-         { "last_login_at", u.last_login_at },
+         { "last_active_at", u.last_active_at },
       };
    }
 
@@ -102,8 +102,8 @@ void AuthRoutes::Register(httplib::Server& srv, AppContext* ctx)
       if(u.password_hash.empty()) { SendError(res, 500, "hash failed"); return; }
       UserRepo::Insert(*ctx->db, u);
       const int64_t now = (int64_t)time(nullptr);
-      UserRepo::UpdateLastLogin(*ctx->db, u.id, now);
-      u.last_login_at = now;
+      UserRepo::UpdateLastActive(*ctx->db, u.id, now);
+      u.last_active_at = now;
 
       const std::string token = ctx->sessions->IssueSession(
          u.id, req.remote_addr, req.get_header_value("User-Agent"));
@@ -147,8 +147,8 @@ void AuthRoutes::Register(httplib::Server& srv, AppContext* ctx)
          return;
       }
       const int64_t now = (int64_t)time(nullptr);
-      UserRepo::UpdateLastLogin(*ctx->db, u->id, now);
-      u->last_login_at = now;
+      UserRepo::UpdateLastActive(*ctx->db, u->id, now);
+      u->last_active_at = now;
       const std::string token = ctx->sessions->IssueSession(
          u->id, req.remote_addr, req.get_header_value("User-Agent"));
       if(token.empty()) { SendError(res, 500, "session issue failed"); return; }
