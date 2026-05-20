@@ -180,7 +180,11 @@ export function TemplateDesignerPage() {
           key: uniqueKey('col_', prev.columns),
           label: 'New column',
           kind: 'identifier',
-          format: 'text',
+          //--- Default source = login (return_type=int), so default format
+          //--- is `int`. Stays consistent if the user keeps login; if they
+          //--- pick a different source via FieldPicker, the format auto-
+          //--- aligns via formatForReturnType.
+          format: 'int',
           source: 'login',
           pivot_key: !hasPivot,
         }],
@@ -197,7 +201,12 @@ export function TemplateDesignerPage() {
         key: uniqueKey('col_', prev.columns),
         label: 'New formula',
         kind: 'formula',
-        format: 'money',
+        //--- Default to `number` (decimals, no $ sign) — formulas typically
+        //--- yield abstract figures (lots, ratios, net exposure) where the
+        //--- currency prefix is noise. User can switch to money/int/pct
+        //--- explicitly when the formula returns a currency amount or a
+        //--- ratio.
+        format: 'number',
       }],
     }));
     setChipsByIdx(prev => [...prev, []]);
