@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useReportJob } from '../hooks/useReportJob';
 import { ReportsAPI, type SendTelegramOpts } from '../api/reports';
 import { SettingsAPI } from '../api/settings';
@@ -53,6 +53,7 @@ type ExportFormat = 'csv' | 'xlsx' | 'pdf' | 'screenshot' | 'text';
 
 export function ResultViewPage() {
   const { id } = useParams();
+  const nav = useNavigate();
   const jobId = id != null ? Number(id) : null;
   const { job, error } = useReportJob(jobId);
   const { user } = useAuth();
@@ -83,6 +84,14 @@ export function ResultViewPage() {
     <div className="space-y-4">
       <div className="flex items-start justify-between">
         <div>
+          <button
+            type="button"
+            onClick={() => nav(-1)}
+            className="btn-secondary text-xs mb-2 inline-flex items-center gap-1"
+            title="Go back to where you came from"
+          >
+            ← Back
+          </button>
           <Breadcrumbs items={[
             { label: 'History', to: '/history' },
             { label: `Job #${job.id} — ${templateName}` },

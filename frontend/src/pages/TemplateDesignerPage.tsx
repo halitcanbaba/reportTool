@@ -12,6 +12,10 @@ import { FormulaEditor } from '../components/FormulaEditor';
 import { FieldPicker } from '../components/FieldPicker';
 import { PredicateEditor } from '../components/PredicateEditor';
 import { Breadcrumbs } from '../components/Breadcrumbs';
+import {
+  formatForReturnType, inferFormulaFormat,
+  reconcileIdentifierFormats, suggestedFormat,
+} from '../lib/columnFormat';
 
 //--- Predicate target for a pivot identifier — mirrors Engine.cpp's
 //--- driver split. symbol/ticket live on deal records; everything else
@@ -19,19 +23,6 @@ import { Breadcrumbs } from '../components/Breadcrumbs';
 function predicateSourceFor(source: string | undefined): 'user' | 'deal' {
   if (source === 'symbol' || source === 'ticket') return 'deal';
   return 'user';
-}
-
-//--- Map a field's `return_type` to a sensible default `ColumnFormat` when
-//--- the user picks a new source via the FieldPicker. Without this, picking
-//--- e.g. `login` (return_type='int') on a default-text column saved the
-//--- column as text and Excel exports looked like "8921.00" once CSV used
-//--- money format. User can still override via the format <select>.
-function formatForReturnType(rt: FieldDef['return_type']): ColumnFormat {
-  if (rt === 'int')   return 'int';
-  if (rt === 'money') return 'money';
-  if (rt === 'pct')   return 'pct';
-  if (rt === 'date')  return 'date';
-  return 'text';
 }
 
 function countPredicate(p: Predicate | null | undefined): number {
@@ -119,8 +110,24 @@ export function TemplateDesignerPage() {
       //--- derive chips from loaded AST for each formula column
       setChipsByIdx(t.columns.map(c => c.kind === 'formula' ? astToChips(c.expr ?? null) : []));
       setErrByIdx(t.columns.map(() => null));
+      setReconciled(false);
     });
   }, [editing, id]);
+
+  //--- Silent identifier-format migration. Runs once per template load,
+  //--- after both the template and the catalog are available. Catches old
+  //--- templates that have e.g. login (return_type=int) saved as 'money'
+  //--- — the format is silently realigned in memory; the next save persists
+  //--- it. Formula columns are untouched (handled separately in applyChips).
+  const [reconciled, setReconciled] = useState(false);
+  useEffect(() => {
+    if (!catalog || reconciled || tpl.columns.length === 0) return;
+    const fixed = reconcileIdentifierFormats(tpl.columns, catalog);
+    if (fixed !== tpl.columns) {
+      setTpl(prev => ({ ...prev, columns: fixed }));
+    }
+    setReconciled(true);
+  }, [catalog, tpl.columns, reconciled]);
 
   const dateParams = useMemo(
     () => dpRaw.split(',').map(s => s.trim()).filter(Boolean),
@@ -138,6 +145,30 @@ export function TemplateDesignerPage() {
       columns: prev.columns.map((c, i) => i === idx ? { ...c, ...patch } : c),
     }));
 
+  //--- Update a formula column's expression AND re-derive its format from
+  //--- the new operands' return_types, unless the user has manually overridden
+  //--- the format (heuristic: current format differs from what we'd have
+  //--- auto-derived for the OLD expression). Atomic via setTpl(prev => ...)
+  //--- so it composes cleanly with other patches.
+  const applyExprPatch = (idx: number, ast: ExprNode | null | undefined) => {
+    setTpl(prev => ({
+      ...prev,
+      columns: prev.columns.map((c, i) => {
+        if (i !== idx) return c;
+        if (!catalog || c.kind !== 'formula') {
+          return { ...c, expr: ast ?? undefined };
+        }
+        const prevInferred = inferFormulaFormat(c.expr ?? null, catalog);
+        //--- 'number' is the initial default for new formulas; treat it as
+        //--- "still auto" until the user clicks the format dropdown.
+        const wasAuto = c.format === 'number' || (prevInferred != null && c.format === prevInferred);
+        const wantFmt = inferFormulaFormat(ast ?? null, catalog);
+        const fmtPatch = (wasAuto && wantFmt && wantFmt !== c.format) ? { format: wantFmt } : {};
+        return { ...c, expr: ast ?? undefined, ...fmtPatch };
+      }),
+    }));
+  };
+
   //--- Core helper: mutate chips for one column, re-parse to AST.
   const applyChips = (idx: number, next: Chip[]) => {
     setChipsByIdx(prev => {
@@ -147,16 +178,16 @@ export function TemplateDesignerPage() {
     });
     if (next.length === 0) {
       setErrByIdx(prev => { const a = prev.slice(); a[idx] = null; return a; });
-      updateColumn(idx, { expr: undefined });
+      applyExprPatch(idx, undefined);
       return;
     }
     try {
       const ast = chipsToAst(next);
       setErrByIdx(prev => { const a = prev.slice(); a[idx] = null; return a; });
-      updateColumn(idx, { expr: ast });
+      applyExprPatch(idx, ast);
     } catch (e: any) {
       setErrByIdx(prev => { const a = prev.slice(); a[idx] = e.message ?? 'parse error'; return a; });
-      updateColumn(idx, { expr: undefined });
+      applyExprPatch(idx, undefined);
     }
   };
 
@@ -165,7 +196,7 @@ export function TemplateDesignerPage() {
     const next = ast ? astToChips(ast) : [];
     setChipsByIdx(prev => { const a = prev.slice(); a[idx] = next; return a; });
     setErrByIdx (prev => { const a = prev.slice(); a[idx] = null; return a; });
-    updateColumn(idx, { expr: ast ?? undefined });
+    applyExprPatch(idx, ast);
   };
 
   const addIdentifierColumn = () => {
@@ -391,16 +422,32 @@ export function TemplateDesignerPage() {
                     <option value="identifier">identifier</option>
                     <option value="formula">formula</option>
                   </select>
-                  <select className="input text-sm" style={{ width: 100 }}
-                          value={c.format}
-                          onChange={e => updateColumn(idx, { format: e.target.value as ColumnFormat })}>
-                    <option value="money">money</option>
-                    <option value="number">number</option>
-                    <option value="pct">pct</option>
-                    <option value="int">int</option>
-                    <option value="text">text</option>
-                    <option value="date">date</option>
-                  </select>
+                  <div className="flex items-center gap-1">
+                    <select className="input text-sm" style={{ width: 100 }}
+                            value={c.format}
+                            onChange={e => updateColumn(idx, { format: e.target.value as ColumnFormat })}>
+                      <option value="money">money</option>
+                      <option value="number">number</option>
+                      <option value="pct">pct</option>
+                      <option value="int">int</option>
+                      <option value="text">text</option>
+                      <option value="date">date</option>
+                    </select>
+                    {(() => {
+                      const want = suggestedFormat(c, catalog);
+                      if (!want || want === c.format) return null;
+                      return (
+                        <button
+                          type="button"
+                          title={`Auto-detect from ${c.kind === 'identifier' ? `source "${c.source}"` : 'operands'} → ${want}`}
+                          className="text-xs text-blue-600 hover:text-blue-800 hover:underline px-1 whitespace-nowrap"
+                          onClick={() => updateColumn(idx, { format: want })}
+                        >
+                          ↻ {want}
+                        </button>
+                      );
+                    })()}
+                  </div>
                   <button className="btn-secondary text-xs" onClick={() => moveColumn(idx, -1)} disabled={idx === 0}>↑</button>
                   <button className="btn-secondary text-xs" onClick={() => moveColumn(idx, +1)} disabled={idx === tpl.columns.length - 1}>↓</button>
                   {c.kind === 'formula' && (
