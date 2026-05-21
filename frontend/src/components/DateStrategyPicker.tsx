@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { PRESETS, canonicalRangeKeys, resolvePreset } from '../lib/dateRange';
 import type { DatePresetKey } from '../lib/dateRange';
 import type { RelativePreset, Template } from '../types';
+import { CustomDateRangeFields } from './CustomDateRangeFields';
 
 //--- Date strategy picker for ready-made reports.
 //--- Preset chip selected → date_strategy='relative' with backend-mapped preset
@@ -96,8 +97,8 @@ export function DateStrategyPicker({ template, value, onChange }: Props) {
     onChange({ ...value, date_strategy: 'fixed', fixed_dates: seed });
   };
 
-  const setFixed = (name: string, v: string) =>
-    onChange({ ...value, date_strategy: 'fixed', fixed_dates: { ...value.fixed_dates, [name]: v } });
+  const onFixedChange = (next: Record<string, string>) =>
+    onChange({ ...value, date_strategy: 'fixed', fixed_dates: next });
 
   if (!template) {
     return <div className="text-xs text-ink-500">Select a template first to choose its date strategy.</div>;
@@ -147,19 +148,11 @@ export function DateStrategyPicker({ template, value, onChange }: Props) {
       )}
 
       {isCustom && (
-        <div className={`grid gap-3 ${template.date_params.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
-          {template.date_params.map(name => (
-            <div key={name}>
-              <label className="label font-mono">{name}</label>
-              <input
-                className="input"
-                type="date"
-                value={value.fixed_dates[name] ?? ''}
-                onChange={e => setFixed(name, e.target.value)}
-              />
-            </div>
-          ))}
-        </div>
+        <CustomDateRangeFields
+          dateParams={template.date_params}
+          value={value.fixed_dates}
+          onChange={onFixedChange}
+        />
       )}
 
       <div className="text-[11px] text-ink-400">

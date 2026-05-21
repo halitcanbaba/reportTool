@@ -92,6 +92,60 @@ export function resolvePreset(key: DatePresetKey): DateRange {
   }
 }
 
+//--- Quick-fill helpers used by the custom-date editor. All ranges are
+//--- inclusive ("31 days" for Mar 1 → Mar 31) and broker-UTC.
+
+//--- 28/29/30/31. Handles leap years correctly. month is 1..12.
+export function lastDayOfMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+//--- Parse YYYY-MM-DD → {y,m,d} (m is 1..12). Returns null on bad input.
+export function parseYmd(s: string): { y: number; m: number; d: number } | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!match) return null;
+  const y = +match[1], m = +match[2], d = +match[3];
+  if (m < 1 || m > 12 || d < 1 || d > 31) return null;
+  return { y, m, d };
+}
+
+//--- Inclusive day count. Returns 0 for invalid / inverted ranges.
+export function daysBetween(from: string, to: string): number {
+  const a = parseYmd(from), b = parseYmd(to);
+  if (!a || !b) return 0;
+  const t1 = Date.UTC(a.y, a.m - 1, a.d);
+  const t2 = Date.UTC(b.y, b.m - 1, b.d);
+  if (t2 < t1) return 0;
+  return Math.floor((t2 - t1) / 86400000) + 1;
+}
+
+//--- "2026-03" → { from: "2026-03-01", to: "2026-03-31" }. Returns null
+//--- if the input is not a YYYY-MM string (e.g. user cleared the picker).
+export function monthRange(yyyymm: string): DateRange | null {
+  const match = /^(\d{4})-(\d{2})$/.exec(yyyymm);
+  if (!match) return null;
+  const y = +match[1], m = +match[2];
+  if (m < 1 || m > 12) return null;
+  const last = lastDayOfMonth(y, m);
+  const mm = String(m).padStart(2, '0');
+  return { from: `${y}-${mm}-01`, to: `${y}-${mm}-${String(last).padStart(2, '0')}` };
+}
+
+//--- (year, 1..4) → { from: "YYYY-Q1Start", to: "YYYY-Q1End" }
+export function quarterRange(year: number, q: 1 | 2 | 3 | 4): DateRange {
+  const startMonth = (q - 1) * 3 + 1;             // 1, 4, 7, 10
+  const endMonth   = startMonth + 2;              // 3, 6, 9, 12
+  const endDay     = lastDayOfMonth(year, endMonth);
+  const mm1 = String(startMonth).padStart(2, '0');
+  const mm2 = String(endMonth).padStart(2, '0');
+  return { from: `${year}-${mm1}-01`, to: `${year}-${mm2}-${String(endDay).padStart(2, '0')}` };
+}
+
+//--- year → Jan 1 → Dec 31.
+export function yearRange(year: number): DateRange {
+  return { from: `${year}-01-01`, to: `${year}-12-31` };
+}
+
 //--- Pick the (fromKey, toKey) of a 2-param list — preferring canonical names.
 export function canonicalRangeKeys(params: string[]): [string, string] | null {
   if (params.length !== 2) return null;

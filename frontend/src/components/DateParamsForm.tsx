@@ -1,12 +1,14 @@
 import { useMemo } from 'react';
 import { PRESETS, canonicalRangeKeys, detectPreset, resolvePreset } from '../lib/dateRange';
 import type { DatePresetKey } from '../lib/dateRange';
+import { CustomDateRangeFields } from './CustomDateRangeFields';
 
 //--- Unified date-parameter input.
 //--- For 2-param templates: shows a row of preset chips (Today / Yesterday /
 //--- Last 7 days / This week / Last week / This month / Last month / Custom)
-//--- + per-param date inputs. Editing the inputs disables the active preset.
-//--- For other arities: just renders the inputs.
+//--- + the shared CustomDateRangeFields editor (quick-fill row + From/To
+//--- inputs + preview + validation). Editing the inputs unsets the active
+//--- preset visually. For other arities: just renders the shared editor.
 
 type Props = {
   dateParams: string[];                         // template's date_params
@@ -27,9 +29,6 @@ export function DateParamsForm({ dateParams, value, onChange }: Props) {
     const r = resolvePreset(key);
     onChange({ ...value, [rangeKeys[0]]: r.from, [rangeKeys[1]]: r.to });
   };
-
-  const setOne = (name: string, v: string) =>
-    onChange({ ...value, [name]: v });
 
   if (dateParams.length === 0) {
     return <div className="text-xs text-ink-400">Template has no date parameters.</div>;
@@ -68,19 +67,7 @@ export function DateParamsForm({ dateParams, value, onChange }: Props) {
         </div>
       )}
 
-      <div className={`grid gap-3 ${dateParams.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
-        {dateParams.map(name => (
-          <div key={name}>
-            <label className="label font-mono">{name}</label>
-            <input
-              className="input"
-              type="date"
-              value={value[name] ?? ''}
-              onChange={e => setOne(name, e.target.value)}
-            />
-          </div>
-        ))}
-      </div>
+      <CustomDateRangeFields dateParams={dateParams} value={value} onChange={onChange} />
 
       <div className="text-[11px] text-ink-400">
         Dates interpreted in UTC (MT5 broker trading day).
