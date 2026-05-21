@@ -1,7 +1,12 @@
+//--- 'money' format: commas + 2 decimals + leading sign for negatives, but
+//--- NO currency prefix. We used to prepend "$" but the user found it noisy
+//--- across an MT5 broker tool where the same number can be EUR/USD/GBP.
+//--- Visually identical to fmtNumber today; the format value is still kept
+//--- distinct so the template designer can semantically tag a column as
+//--- "currency amount" — useful for future locale-aware formatting.
 export function fmtMoney(v: number, digits = 2): string {
   if (!Number.isFinite(v)) return '';
-  const sign = v < 0 ? '-' : '';
-  return sign + '$' + Math.abs(v).toLocaleString('en-US', {
+  return v.toLocaleString('en-US', {
     minimumFractionDigits: digits, maximumFractionDigits: digits,
   });
 }
@@ -16,6 +21,14 @@ export function fmtNumber(v: number, digits = 2): string {
 export function fmtInt(v: number): string {
   if (!Number.isFinite(v)) return '';
   return Math.round(v).toLocaleString('en-US');
+}
+
+//--- Plain integer with NO thousand separators. Used for identifier-int
+//--- columns (login, ticket): an account number "8921" should never look
+//--- like "8,921" because it isn't a count, it's an opaque identifier.
+export function fmtPlainInt(v: number): string {
+  if (!Number.isFinite(v)) return '';
+  return String(Math.round(v));
 }
 
 export function fmtPct(v: number, digits = 2): string {

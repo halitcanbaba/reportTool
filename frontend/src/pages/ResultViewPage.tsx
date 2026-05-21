@@ -6,17 +6,23 @@ import { SettingsAPI } from '../api/settings';
 import { useAuth } from '../contexts/AuthContext';
 import { StatusPill } from '../components/StatusPill';
 import { Breadcrumbs } from '../components/Breadcrumbs';
-import { fmtDateTime, fmtMoney, fmtNumber, fmtPct, fmtInt, fmtDate } from '../utils/format';
+import { fmtDateTime, fmtMoney, fmtNumber, fmtPct, fmtInt, fmtPlainInt, fmtDate } from '../utils/format';
 import {
   toXlsxBlob, toPdfBlob, toScreenshotBlob, fetchCsvBlob,
   buildTextSummary, safeBaseName,
 } from '../lib/reportExport';
 import type { ResultPreview } from '../types';
 
-const fmtCell = (v: number | string | null, fmt: string): string => {
+type CellMeta = { format: string; kind?: 'identifier' | 'formula' };
+
+const fmtCell = (v: number | string | null, c: CellMeta): string => {
   if (v == null) return '';
   if (typeof v === 'string') return v;
-  switch (fmt) {
+  //--- Identifier ints (login, ticket) are opaque IDs — render plain, no
+  //--- thousand separators or decimals. Aggregator ints (count_*) keep
+  //--- their commas via fmtInt.
+  if (c.kind === 'identifier' && c.format === 'int') return fmtPlainInt(v);
+  switch (c.format) {
     case 'money':  return fmtMoney(v);
     case 'number': return fmtNumber(v);
     case 'pct':    return fmtPct(v);
@@ -188,7 +194,7 @@ export function ResultViewPage() {
                     const align = c.format === 'text' ? 'text-left' : 'text-right tabular-nums';
                     return (
                       <td key={c.key} className={`px-3 py-2 ${align} ${c.format === 'text' ? '' : 'font-mono'}`}>
-                        {fmtCell(cell ?? null, c.format)}
+                        {fmtCell(cell ?? null, c)}
                       </td>
                     );
                   })}

@@ -4,15 +4,19 @@
 //| import() so the initial bundle stays small.                       |
 //+------------------------------------------------------------------+
 import type { ResultPreview } from '../types';
-import { fmtMoney, fmtNumber, fmtPct, fmtInt, fmtDate } from '../utils/format';
+import { fmtMoney, fmtNumber, fmtPct, fmtInt, fmtPlainInt, fmtDate } from '../utils/format';
 import { ReportsAPI } from '../api/reports';
+
+type CellMeta = { format: string; kind?: 'identifier' | 'formula' };
 
 //--- Format one preview cell the same way the on-screen table does, so the
 //--- exported file matches what the user sees.
-function fmtCell(v: number | string | null, fmt: string): string {
+function fmtCell(v: number | string | null, c: CellMeta): string {
   if (v == null) return '';
   if (typeof v === 'string') return v;
-  switch (fmt) {
+  //--- Identifier ints (login, ticket) are opaque IDs — render plain.
+  if (c.kind === 'identifier' && c.format === 'int') return fmtPlainInt(v);
+  switch (c.format) {
     case 'money':  return fmtMoney(v);
     case 'number': return fmtNumber(v);
     case 'pct':    return fmtPct(v);
@@ -107,7 +111,7 @@ export async function toPdfBlob(preview: ResultPreview, title: string, jobId: nu
       if (c.format === 'text') return String(raw);
       const n = Number(raw);
       if (!Number.isFinite(n)) return String(raw);
-      return fmtCell(n, c.format);
+      return fmtCell(n, c);
     }));
   }
 
@@ -177,7 +181,7 @@ export function buildTextSummary(
   const rows = preview.rows.slice(0, maxRows);
   const widths = cols.map((c, k) => {
     const headerW = c.label.length;
-    const dataW = Math.max(0, ...rows.map(r => fmtCell(r[k] ?? null, c.format).length));
+    const dataW = Math.max(0, ...rows.map(r => fmtCell(r[k] ?? null, c).length));
     return Math.min(20, Math.max(headerW, dataW)); // hard cap 20
   });
   const fmt = (vals: string[]) => vals.map((v, i) => v.padEnd(widths[i]).slice(0, widths[i])).join(' | ');
@@ -186,7 +190,7 @@ export function buildTextSummary(
   lines.push('```');
   lines.push(fmt(cols.map(c => c.label)));
   lines.push(sep);
-  for (const r of rows) lines.push(fmt(cols.map((c, k) => fmtCell(r[k] ?? null, c.format))));
+  for (const r of rows) lines.push(fmt(cols.map((c, k) => fmtCell(r[k] ?? null, c))));
   lines.push('```');
 
   if (preview.rows.length > rows.length) {
