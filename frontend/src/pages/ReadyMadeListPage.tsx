@@ -5,7 +5,7 @@ import { TemplatesAPI } from '../api/templates';
 import { AccountFiltersAPI } from '../api/accountFilters';
 import { ManagersAPI } from '../api/managers';
 import { AccountFilterPicker } from '../components/AccountFilterPicker';
-import { DateParamsForm } from '../components/DateParamsForm';
+import { CompactDateRangeFields } from '../components/CompactDateRangeFields';
 import { resolvePreset } from '../lib/dateRange';
 import { fmtDateTime, todayLocal } from '../utils/format';
 import { copyName } from '../lib/duplicate';
@@ -299,7 +299,7 @@ function RunWithModal({ rm, template, onCancel, onSubmitted }:{
         <div>
           <div className="text-sm font-semibold text-ink-700 uppercase tracking-wide mb-2">Date range</div>
           {!template && <div className="text-xs text-red-600">Template not loaded — cannot edit dates.</div>}
-          {template && <DateParamsForm dateParams={template.date_params} value={dates} onChange={setDates} />}
+          {template && <CompactDateRangeFields dateParams={template.date_params} value={dates} onChange={setDates} />}
         </div>
 
         <div className="grid grid-cols-2 gap-3">
