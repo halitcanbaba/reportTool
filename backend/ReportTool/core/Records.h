@@ -302,6 +302,23 @@ struct AccountFilter
    int64_t                   updated_at  = 0;
 };
 
+//--- Saved cash-flow classifier: a named Predicate over the 'deal' source.
+//--- Users define these once ("Cash deposit, not partner promo") and then
+//--- import them into any formula aggregator's predicate slot from the
+//--- PredicateEditor UI. Snapshot semantics: imports copy the predicate
+//--- tree into the formula; later edits to the saved filter do not
+//--- propagate (Predicate::Kind::Saved live-reference is a future scope).
+struct DealFilter
+{
+   int64_t                    id          = 0;
+   std::string                name;
+   std::string                description;
+   std::shared_ptr<Predicate> predicate;
+   int                        sort_order  = 0;
+   int64_t                    created_at  = 0;
+   int64_t                    updated_at  = 0;
+};
+
 //--- Per-aggregator predicate over the underlying row (deal/daily/position/order).
 enum class FilterOp
 {

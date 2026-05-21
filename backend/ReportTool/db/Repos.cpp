@@ -336,6 +336,110 @@ bool AccountFilterRepo::Delete(SqliteDb& db, int64_t id)
    return true;
 }
 
+//+--------------------- DealFilterRepo ----------------------------+
+
+namespace
+{
+   void FillDealFilterFromStmt(SqliteStmt& st, DealFilter& f)
+   {
+      f.id          = st.ColI64(0);
+      f.name        = st.ColText(1);
+      f.description = st.ColText(2);
+      const std::string pj = st.ColText(3);
+      if(!pj.empty())
+      {
+         nlohmann::json j = nlohmann::json::parse(pj, nullptr, false);
+         if(!j.is_discarded())
+         {
+            std::string err;
+            Expression::PredicateFromJson(j, &f.predicate, &err);
+         }
+      }
+      f.sort_order = st.ColInt(4);
+      f.created_at = st.ColI64(5);
+      f.updated_at = st.ColI64(6);
+   }
+
+   std::string DealFilterPredJson(const DealFilter& f)
+   {
+      if(!f.predicate) return "";
+      return Expression::PredicateToJson(*f.predicate).dump();
+   }
+}
+
+std::vector<DealFilter> DealFilterRepo::ListAll(SqliteDb& db)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   std::vector<DealFilter> out;
+   SqliteStmt st(db,
+      "SELECT id,name,description,predicate_json,sort_order,created_at,updated_at "
+      "FROM deal_filters ORDER BY sort_order, id");
+   while(st.Step())
+   {
+      DealFilter f; FillDealFilterFromStmt(st, f);
+      out.push_back(std::move(f));
+   }
+   return out;
+}
+
+std::optional<DealFilter> DealFilterRepo::Get(SqliteDb& db, int64_t id)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   SqliteStmt st(db,
+      "SELECT id,name,description,predicate_json,sort_order,created_at,updated_at "
+      "FROM deal_filters WHERE id=?");
+   st.BindI64(1, id);
+   if(!st.Step()) return std::nullopt;
+   DealFilter f; FillDealFilterFromStmt(st, f);
+   return f;
+}
+
+int64_t DealFilterRepo::Insert(SqliteDb& db, DealFilter& f)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   const int64_t now = (int64_t)time(nullptr);
+   SqliteStmt st(db,
+      "INSERT INTO deal_filters(name,description,predicate_json,sort_order,created_at,updated_at) "
+      "VALUES(?,?,?,?,?,?)");
+   st.BindText(1, f.name);
+   st.BindText(2, f.description);
+   st.BindText(3, DealFilterPredJson(f));
+   st.BindInt (4, f.sort_order);
+   st.BindI64 (5, now);
+   st.BindI64 (6, now);
+   st.Step();
+   f.id = db.LastInsertRowid();
+   f.created_at = f.updated_at = now;
+   return f.id;
+}
+
+bool DealFilterRepo::Update(SqliteDb& db, DealFilter& f)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   const int64_t now = (int64_t)time(nullptr);
+   SqliteStmt st(db,
+      "UPDATE deal_filters SET name=?,description=?,predicate_json=?,sort_order=?,"
+      "updated_at=? WHERE id=?");
+   st.BindText(1, f.name);
+   st.BindText(2, f.description);
+   st.BindText(3, DealFilterPredJson(f));
+   st.BindInt (4, f.sort_order);
+   st.BindI64 (5, now);
+   st.BindI64 (6, f.id);
+   st.Step();
+   f.updated_at = now;
+   return true;
+}
+
+bool DealFilterRepo::Delete(SqliteDb& db, int64_t id)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   SqliteStmt st(db, "DELETE FROM deal_filters WHERE id=?");
+   st.BindI64(1, id);
+   st.Step();
+   return true;
+}
+
 //+--------------------- TemplateRepo ------------------------------+
 
 namespace

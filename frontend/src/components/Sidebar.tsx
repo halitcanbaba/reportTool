@@ -8,6 +8,7 @@ import pkg from '../../package.json';
 const baseItems = [
   { to: '/managers',        label: 'Managers' },
   { to: '/account-filters', label: 'Account Filters' },
+  { to: '/deal-filters',    label: 'Deal Filters' },
   { to: '/blueprints',      label: 'Blueprints' },
   { to: '/templates',       label: 'Templates' },
   { to: '/ready-made',      label: 'Ready-made' },

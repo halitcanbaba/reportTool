@@ -35,6 +35,15 @@ namespace AccountFilterRepo
    bool    Delete(SqliteDb& db, int64_t id);
 }
 
+namespace DealFilterRepo
+{
+   std::vector<DealFilter>  ListAll(SqliteDb& db);
+   std::optional<DealFilter> Get(SqliteDb& db, int64_t id);
+   int64_t Insert(SqliteDb& db, DealFilter& f);
+   bool    Update(SqliteDb& db, DealFilter& f);
+   bool    Delete(SqliteDb& db, int64_t id);
+}
+
 namespace TemplateRepo
 {
    std::vector<ReportTemplate>  ListAll(SqliteDb& db);

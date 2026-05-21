@@ -70,6 +70,22 @@ export type AccountFilter = {
 
 export type AccountFilterInput = Omit<AccountFilter, 'id' | 'created_at' | 'updated_at'>;
 
+//--- Saved cash-flow classifier: a named Predicate over the 'deal' source.
+//--- Defined and previewed via DealFilterEditPage; imported into formula
+//--- aggregator predicate slots via PredicateEditor's "Import saved…" picker.
+//--- Snapshot semantics: an import copies the tree into the formula AST;
+//--- later edits to the saved filter do not propagate retroactively.
+export type DealFilter = {
+  id: number;
+  name: string;
+  description: string;
+  predicate: Predicate;
+  sort_order?: number;
+  created_at: number;
+  updated_at: number;
+};
+export type DealFilterInput = Omit<DealFilter, 'id' | 'created_at' | 'updated_at'>;
+
 //--- Organisational folders shared across the five user-content entities.
 
 export type FolderEntityType =

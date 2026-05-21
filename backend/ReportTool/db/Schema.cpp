@@ -3,7 +3,7 @@
 
 namespace
 {
-   constexpr int kCurrentSchemaVersion = 13;
+   constexpr int kCurrentSchemaVersion = 14;
 
    //--- Tables that survive every version (managers, regex_filters,
    //--- daily_cache, deal_cache). These are idempotent.
@@ -392,6 +392,28 @@ namespace
       }
       return WriteVersion(db, 13, err);
    }
+
+   //--- v13 → v14: deal_filters table. Holds named, saved Predicate trees
+   //--- over the 'deal' source so users can build reusable cash-flow
+   //--- classifications ("Cash deposit", "Promo bonus", "SO compensation")
+   //--- and plug them into any formula aggregator's predicate slot.
+   const char* kV14Tables = R"SQL(
+      CREATE TABLE IF NOT EXISTS deal_filters (
+         id              INTEGER PRIMARY KEY AUTOINCREMENT,
+         name            TEXT NOT NULL UNIQUE,
+         description     TEXT NOT NULL DEFAULT '',
+         predicate_json  TEXT NOT NULL,
+         sort_order      INTEGER NOT NULL DEFAULT 0,
+         created_at      INTEGER NOT NULL,
+         updated_at      INTEGER NOT NULL
+      );
+   )SQL";
+
+   bool MigrateToV14(SqliteDb& db, std::string* err)
+   {
+      if(!db.Exec(kV14Tables, err)) return false;
+      return WriteVersion(db, 14, err);
+   }
 }
 
 bool Schema::Apply(SqliteDb& db, std::string* err)
@@ -440,6 +462,8 @@ bool Schema::Apply(SqliteDb& db, std::string* err)
             if(!db.Exec(sql, err)) return false;
          }
       }
+      //--- v14: deal_filters table for saved cash-flow predicate classifiers.
+      if(!db.Exec(kV14Tables, err)) return false;
       return WriteVersion(db, kCurrentSchemaVersion, err);
    }
    if(v < 2)
@@ -489,6 +513,10 @@ bool Schema::Apply(SqliteDb& db, std::string* err)
    if(v < 13)
    {
       if(!MigrateToV13(db, err)) return false;
+   }
+   if(v < 14)
+   {
+      if(!MigrateToV14(db, err)) return false;
    }
    //--- v >= current: no-op.
    return true;

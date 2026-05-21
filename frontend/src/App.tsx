@@ -9,6 +9,8 @@ import { ManagerListPage } from './pages/ManagerListPage';
 import { ManagerEditPage } from './pages/ManagerEditPage';
 import { AccountFilterListPage } from './pages/AccountFilterListPage';
 import { AccountFilterEditPage } from './pages/AccountFilterEditPage';
+import { DealFilterListPage } from './pages/DealFilterListPage';
+import { DealFilterEditPage } from './pages/DealFilterEditPage';
 import { TemplateListPage } from './pages/TemplateListPage';
 import { TemplateDesignerPage } from './pages/TemplateDesignerPage';
 import { BlueprintListPage } from './pages/BlueprintListPage';
@@ -53,6 +55,9 @@ export default function App() {
         <Route path="/account-filters" element={<AccountFilterListPage />} />
         <Route path="/account-filters/new" element={<AccountFilterEditPage />} />
         <Route path="/account-filters/:id/edit" element={<AccountFilterEditPage />} />
+        <Route path="/deal-filters" element={<DealFilterListPage />} />
+        <Route path="/deal-filters/new" element={<DealFilterEditPage />} />
+        <Route path="/deal-filters/:id/edit" element={<DealFilterEditPage />} />
         <Route path="/blueprints" element={<BlueprintListPage />} />
         <Route path="/blueprints/new" element={<BlueprintEditPage />} />
         <Route path="/blueprints/:id/edit" element={<BlueprintEditPage />} />

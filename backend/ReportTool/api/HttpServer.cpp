@@ -13,6 +13,7 @@
 #include "HealthRoutes.h"
 #include "TemplateRoutes.h"
 #include "AccountFilterRoutes.h"
+#include "DealFilterRoutes.h"
 #include "BlueprintRoutes.h"
 #include "ReadyMadeRoutes.h"
 #include "ScheduleRoutes.h"
@@ -204,6 +205,7 @@ void HttpServer::RegisterRoutes()
    UserRoutes          ::Register(*m_srv, m_ctx);
    ManagerRoutes       ::Register(*m_srv, m_ctx);
    AccountFilterRoutes ::Register(*m_srv, m_ctx);
+   DealFilterRoutes    ::Register(*m_srv, m_ctx);
    BlueprintRoutes     ::Register(*m_srv, m_ctx);
    TemplateRoutes      ::Register(*m_srv, m_ctx);
    ReadyMadeRoutes     ::Register(*m_srv, m_ctx);

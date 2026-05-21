@@ -100,6 +100,7 @@
     <ClInclude Include="api\HealthRoutes.h" />
     <ClInclude Include="api\TemplateRoutes.h" />
     <ClInclude Include="api\AccountFilterRoutes.h" />
+    <ClInclude Include="api\DealFilterRoutes.h" />
     <ClInclude Include="api\BlueprintRoutes.h" />
     <ClInclude Include="api\ReadyMadeRoutes.h" />
     <ClInclude Include="api\ScheduleRoutes.h" />
@@ -141,6 +142,7 @@
     <ClCompile Include="api\HealthRoutes.cpp" />
     <ClCompile Include="api\TemplateRoutes.cpp" />
     <ClCompile Include="api\AccountFilterRoutes.cpp" />
+    <ClCompile Include="api\DealFilterRoutes.cpp" />
     <ClCompile Include="api\BlueprintRoutes.cpp" />
     <ClCompile Include="api\ReadyMadeRoutes.cpp" />
     <ClCompile Include="api\ScheduleRoutes.cpp" />
