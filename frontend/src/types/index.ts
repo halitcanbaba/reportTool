@@ -230,9 +230,16 @@ export type FormulaBlueprintInput = Omit<FormulaBlueprint, 'id' | 'created_at' |
 
 //--- Ready-made report (saved template+filter+date bundle) ----------
 
+//--- Base presets stop at yesterday (sealed daily snapshot); the
+//--- `_to_date` variants include today (partial snapshot). See
+//--- backend Scheduler.cpp::ResolveRelative for the canonical formulas.
 export type RelativePreset =
-  | 'today' | 'yesterday' | 'last_n_days'
-  | 'this_week' | 'last_week' | 'this_month' | 'last_month';
+  | 'today' | 'yesterday'
+  | 'last_n_days'  | 'last_n_days_to_date'
+  | 'this_week'    | 'this_week_to_date'
+  | 'last_week'
+  | 'this_month'   | 'this_month_to_date'
+  | 'last_month';
 
 export type ReadyMadeReport = {
   id: number;

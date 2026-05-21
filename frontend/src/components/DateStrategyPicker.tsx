@@ -21,26 +21,37 @@ type Props = {
   onChange: (next: StrategyValue) => void;
 };
 
-//--- UI preset chip → backend representation.
+//--- UI preset chip → backend representation. The `_to_date` variants
+//--- include today (partial daily snapshot); the base variants stop at
+//--- yesterday so equity_end-based formulas see a sealed snapshot.
 const presetMap: Record<DatePresetKey, { preset: RelativePreset; n: number }> = {
-  today:      { preset: 'today',       n: 7  },
-  yesterday:  { preset: 'yesterday',   n: 7  },
-  last_7:     { preset: 'last_n_days', n: 7  },
-  last_30:    { preset: 'last_n_days', n: 30 },
-  this_week:  { preset: 'this_week',   n: 7  },
-  last_week:  { preset: 'last_week',   n: 7  },
-  this_month: { preset: 'this_month',  n: 7  },
-  last_month: { preset: 'last_month',  n: 7  },
+  today:              { preset: 'today',                n: 7  },
+  yesterday:          { preset: 'yesterday',            n: 7  },
+  last_7:             { preset: 'last_n_days',          n: 7  },
+  last_7_to_date:     { preset: 'last_n_days_to_date',  n: 7  },
+  last_30:            { preset: 'last_n_days',          n: 30 },
+  last_30_to_date:    { preset: 'last_n_days_to_date',  n: 30 },
+  this_week:          { preset: 'this_week',            n: 7  },
+  this_week_to_date:  { preset: 'this_week_to_date',    n: 7  },
+  last_week:          { preset: 'last_week',            n: 7  },
+  this_month:         { preset: 'this_month',           n: 7  },
+  this_month_to_date: { preset: 'this_month_to_date',   n: 7  },
+  last_month:         { preset: 'last_month',           n: 7  },
 };
 
-//--- Reverse map (relative_preset + n → chip key). Only canonical chips here;
-//--- non-matching (e.g. last_n_days with n=42) returns null so the UI falls
-//--- back to "Custom" mode visually.
+//--- Reverse map (relative_preset + n → chip key). Only canonical chips
+//--- here; non-matching (e.g. last_n_days with n=42) returns null so the
+//--- UI falls back to "Custom" mode visually.
 function detectChip(v: StrategyValue): DatePresetKey | null {
   if (v.date_strategy !== 'relative') return null;
   if (v.relative_preset === 'last_n_days') {
     if (v.relative_n === 7)  return 'last_7';
     if (v.relative_n === 30) return 'last_30';
+    return null;
+  }
+  if (v.relative_preset === 'last_n_days_to_date') {
+    if (v.relative_n === 7)  return 'last_7_to_date';
+    if (v.relative_n === 30) return 'last_30_to_date';
     return null;
   }
   for (const [chip, m] of Object.entries(presetMap)) {

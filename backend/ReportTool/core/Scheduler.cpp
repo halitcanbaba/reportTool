@@ -151,8 +151,22 @@ namespace
       else if(preset == "this_week")
       {
          //--- ISO week starts Monday. dow: 0=Sun..6=Sat → adjust.
+         //--- Sealed days only: `to` = yesterday so equity_end-based formulas
+         //--- read a complete daily snapshot. For "include today" pick
+         //--- `this_week_to_date` below.
          const int dow = DowLocal(now);
          const int back = (dow == 0) ? 6 : (dow - 1);   // Sunday → 6 days back
+         int y1,mo1,d1; AddDaysLocal(now, -back, &y1, &mo1, &d1);
+         int y2,mo2,d2; AddDaysLocal(now, -1,    &y2, &mo2, &d2);
+         *from = YmdString(y1, mo1, d1);
+         *to   = YmdString(y2, mo2, d2);
+      }
+      else if(preset == "this_week_to_date")
+      {
+         //--- Includes today; partial daily snapshot. Use when explicitly
+         //--- comparing intraday running totals.
+         const int dow = DowLocal(now);
+         const int back = (dow == 0) ? 6 : (dow - 1);
          int y1,mo1,d1; AddDaysLocal(now, -back, &y1, &mo1, &d1);
          *from = YmdString(y1, mo1, d1);
          *to   = YmdString(y, mo, d);
@@ -168,7 +182,26 @@ namespace
       }
       else if(preset == "this_month")
       {
+         //--- Sealed days only: `to` = yesterday. Same rationale as this_week.
+         int y2,mo2,d2; AddDaysLocal(now, -1, &y2, &mo2, &d2);
          *from = YmdString(y, mo, 1);
+         *to   = YmdString(y2, mo2, d2);
+      }
+      else if(preset == "this_month_to_date")
+      {
+         //--- Includes today; partial snapshot. Daily-snapshot formulas like
+         //--- equity_end(date_to) will silently fall back to yesterday's row
+         //--- since today's hasn't been written yet — opt-in only.
+         *from = YmdString(y, mo, 1);
+         *to   = YmdString(y, mo, d);
+      }
+      else if(preset == "last_n_days_to_date")
+      {
+         //--- Includes today (today−n+1 .. today). Mirror of last_n_days but
+         //--- with the trailing edge bumped one day forward.
+         const int n = relative_n > 0 ? relative_n : 7;
+         int y1,mo1,d1; AddDaysLocal(now, -(n - 1), &y1, &mo1, &d1);
+         *from = YmdString(y1, mo1, d1);
          *to   = YmdString(y, mo, d);
       }
       else if(preset == "last_month")
