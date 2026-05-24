@@ -70,21 +70,27 @@ export type AccountFilter = {
 
 export type AccountFilterInput = Omit<AccountFilter, 'id' | 'created_at' | 'updated_at'>;
 
-//--- Saved cash-flow classifier: a named Predicate over the 'deal' source.
-//--- Defined and previewed via DealFilterEditPage; imported into formula
-//--- aggregator predicate slots via PredicateEditor's "Import saved…" picker.
-//--- Snapshot semantics: an import copies the tree into the formula AST;
-//--- later edits to the saved filter do not propagate retroactively.
-export type DealFilter = {
+//--- DepositFilter — multi-bucket cash-flow classifier preset. Each bucket
+//--- is a named Predicate over the 'deal' source ("cash_deposit",
+//--- "promotion", "rebate", …). Ready-made reports bind to a DepositFilter
+//--- by id; templates reference bucket keys in the new sum_deposit_amount
+//--- / count_deposits / sum_deposit_abs aggregator fields. Same template
+//--- runs with different per-broker conventions by swapping the binding.
+export type DepositFilterBucket = {
+  key:       string;
+  label:     string;
+  predicate: Predicate;
+};
+export type DepositFilter = {
   id: number;
   name: string;
   description: string;
-  predicate: Predicate;
+  buckets: DepositFilterBucket[];
   sort_order?: number;
   created_at: number;
   updated_at: number;
 };
-export type DealFilterInput = Omit<DealFilter, 'id' | 'created_at' | 'updated_at'>;
+export type DepositFilterInput = Omit<DepositFilter, 'id' | 'created_at' | 'updated_at'>;
 
 //--- Organisational folders shared across the five user-content entities.
 
@@ -125,7 +131,11 @@ export type Predicate = PredCmp | PredAnd | PredOr | PredNot;
 //--- Expression AST ----------------------------------------------
 
 export type ExprLiteral = { type: 'literal'; value: number };
-export type ExprField   = { type: 'field';   name: string; args: string[]; predicate?: Predicate };
+//--- `bucket` is the key of a DepositFilterBucket; only set on deposit-bucket
+//--- fields (sum_deposit_amount / count_deposits / sum_deposit_abs). At run
+//--- time the engine resolves the bucket against the active DepositFilter
+//--- on the ready-made / job.
+export type ExprField   = { type: 'field';   name: string; args: string[]; predicate?: Predicate; bucket?: string };
 export type ExprBinOp   = { type: 'binop';   op: '+' | '-' | '*' | '/'; left: ExprNode; right: ExprNode };
 export type ExprColRef  = { type: 'col_ref'; key: string };
 export type ExprNode    = ExprLiteral | ExprField | ExprBinOp | ExprColRef;
@@ -263,6 +273,10 @@ export type ReadyMadeReport = {
   description: string;
   template_id: number;
   account_filter_id: number | null;
+  //--- Bound DepositFilter id (multi-bucket cash-flow preset). Used by
+  //--- sum_deposit_amount / count_deposits / sum_deposit_abs aggregator
+  //--- fields at run time. Null = unbound; those fields then return 0.
+  deposit_filter_id: number | null;
   date_strategy: 'fixed' | 'relative';
   fixed_dates: Record<string, string>;     // e.g. { "date_from":"2026-04-01", "date_to":"2026-04-30" }
   relative_preset: RelativePreset;
@@ -279,6 +293,7 @@ export type ReadyMadeReportInput = Omit<ReadyMadeReport, 'id' | 'created_at' | '
 export type ReadyMadeRunRequest = {
   dates?: Record<string, string>;
   account_filter_id?: number | null;
+  deposit_filter_id?: number | null;
   top_n?: number;
   manager_id?: number;
 };
@@ -351,6 +366,9 @@ export type RunReportRequest = {
   template_id: number;
   manager_id:  number;
   account_filter_id?: number | null;
+  //--- Active DepositFilter for sum_deposit_amount / count_deposits fields.
+  //--- Null = unbound; those fields return 0.
+  deposit_filter_id?: number | null;
   dates: Record<string, string>;     // YYYY-MM-DD per date_param name
   top_n?: number;
   account_filter_override?: {

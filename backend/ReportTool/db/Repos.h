@@ -35,12 +35,12 @@ namespace AccountFilterRepo
    bool    Delete(SqliteDb& db, int64_t id);
 }
 
-namespace DealFilterRepo
+namespace DepositFilterRepo
 {
-   std::vector<DealFilter>  ListAll(SqliteDb& db);
-   std::optional<DealFilter> Get(SqliteDb& db, int64_t id);
-   int64_t Insert(SqliteDb& db, DealFilter& f);
-   bool    Update(SqliteDb& db, DealFilter& f);
+   std::vector<DepositFilter>   ListAll(SqliteDb& db);
+   std::optional<DepositFilter> Get(SqliteDb& db, int64_t id);
+   int64_t Insert(SqliteDb& db, DepositFilter& f);
+   bool    Update(SqliteDb& db, DepositFilter& f);
    bool    Delete(SqliteDb& db, int64_t id);
 }
 

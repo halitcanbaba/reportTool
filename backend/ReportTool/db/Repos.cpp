@@ -336,74 +336,98 @@ bool AccountFilterRepo::Delete(SqliteDb& db, int64_t id)
    return true;
 }
 
-//+--------------------- DealFilterRepo ----------------------------+
+//+--------------------- DepositFilterRepo -------------------------+
 
 namespace
 {
-   void FillDealFilterFromStmt(SqliteStmt& st, DealFilter& f)
+   //--- buckets_json is a JSON array: [{"key","label","predicate":<pred>}].
+   std::string BucketsToJson(const std::vector<DepositFilterBucket>& bs)
+   {
+      nlohmann::json out = nlohmann::json::array();
+      for(const auto& b : bs)
+      {
+         nlohmann::json bj{
+            { "key",   b.key },
+            { "label", b.label },
+         };
+         if(b.predicate) bj["predicate"] = Expression::PredicateToJson(*b.predicate);
+         else            bj["predicate"] = nullptr;
+         out.push_back(std::move(bj));
+      }
+      return out.dump();
+   }
+
+   std::vector<DepositFilterBucket> BucketsFromJson(const std::string& s)
+   {
+      std::vector<DepositFilterBucket> out;
+      if(s.empty()) return out;
+      auto j = nlohmann::json::parse(s, nullptr, false);
+      if(j.is_discarded() || !j.is_array()) return out;
+      for(const auto& bj : j)
+      {
+         if(!bj.is_object()) continue;
+         DepositFilterBucket b;
+         b.key   = bj.value("key",   std::string());
+         b.label = bj.value("label", std::string());
+         if(bj.contains("predicate") && !bj["predicate"].is_null())
+         {
+            std::string err;
+            Expression::PredicateFromJson(bj["predicate"], &b.predicate, &err);
+         }
+         out.push_back(std::move(b));
+      }
+      return out;
+   }
+
+   void FillDepositFilterFromStmt(SqliteStmt& st, DepositFilter& f)
    {
       f.id          = st.ColI64(0);
       f.name        = st.ColText(1);
       f.description = st.ColText(2);
-      const std::string pj = st.ColText(3);
-      if(!pj.empty())
-      {
-         nlohmann::json j = nlohmann::json::parse(pj, nullptr, false);
-         if(!j.is_discarded())
-         {
-            std::string err;
-            Expression::PredicateFromJson(j, &f.predicate, &err);
-         }
-      }
-      f.sort_order = st.ColInt(4);
-      f.created_at = st.ColI64(5);
-      f.updated_at = st.ColI64(6);
-   }
-
-   std::string DealFilterPredJson(const DealFilter& f)
-   {
-      if(!f.predicate) return "";
-      return Expression::PredicateToJson(*f.predicate).dump();
+      f.buckets     = BucketsFromJson(st.ColText(3));
+      f.sort_order  = st.ColInt(4);
+      f.created_at  = st.ColI64(5);
+      f.updated_at  = st.ColI64(6);
    }
 }
 
-std::vector<DealFilter> DealFilterRepo::ListAll(SqliteDb& db)
+std::vector<DepositFilter> DepositFilterRepo::ListAll(SqliteDb& db)
 {
    std::lock_guard<std::mutex> lock(db.Mutex());
-   std::vector<DealFilter> out;
+   std::vector<DepositFilter> out;
    SqliteStmt st(db,
-      "SELECT id,name,description,predicate_json,sort_order,created_at,updated_at "
-      "FROM deal_filters ORDER BY sort_order, id");
+      "SELECT id,name,description,buckets_json,sort_order,created_at,updated_at "
+      "FROM deposit_filters ORDER BY sort_order, id");
    while(st.Step())
    {
-      DealFilter f; FillDealFilterFromStmt(st, f);
+      DepositFilter f; FillDepositFilterFromStmt(st, f);
       out.push_back(std::move(f));
    }
    return out;
 }
 
-std::optional<DealFilter> DealFilterRepo::Get(SqliteDb& db, int64_t id)
+std::optional<DepositFilter> DepositFilterRepo::Get(SqliteDb& db, int64_t id)
 {
    std::lock_guard<std::mutex> lock(db.Mutex());
    SqliteStmt st(db,
-      "SELECT id,name,description,predicate_json,sort_order,created_at,updated_at "
-      "FROM deal_filters WHERE id=?");
+      "SELECT id,name,description,buckets_json,sort_order,created_at,updated_at "
+      "FROM deposit_filters WHERE id=?");
    st.BindI64(1, id);
    if(!st.Step()) return std::nullopt;
-   DealFilter f; FillDealFilterFromStmt(st, f);
+   DepositFilter f; FillDepositFilterFromStmt(st, f);
    return f;
 }
 
-int64_t DealFilterRepo::Insert(SqliteDb& db, DealFilter& f)
+int64_t DepositFilterRepo::Insert(SqliteDb& db, DepositFilter& f)
 {
    std::lock_guard<std::mutex> lock(db.Mutex());
    const int64_t now = (int64_t)time(nullptr);
    SqliteStmt st(db,
-      "INSERT INTO deal_filters(name,description,predicate_json,sort_order,created_at,updated_at) "
+      "INSERT INTO deposit_filters(name,description,buckets_json,sort_order,created_at,updated_at) "
       "VALUES(?,?,?,?,?,?)");
    st.BindText(1, f.name);
    st.BindText(2, f.description);
-   st.BindText(3, DealFilterPredJson(f));
+   st.BindText(3, BucketsToJson(f.buckets));
    st.BindInt (4, f.sort_order);
    st.BindI64 (5, now);
    st.BindI64 (6, now);
@@ -413,16 +437,16 @@ int64_t DealFilterRepo::Insert(SqliteDb& db, DealFilter& f)
    return f.id;
 }
 
-bool DealFilterRepo::Update(SqliteDb& db, DealFilter& f)
+bool DepositFilterRepo::Update(SqliteDb& db, DepositFilter& f)
 {
    std::lock_guard<std::mutex> lock(db.Mutex());
    const int64_t now = (int64_t)time(nullptr);
    SqliteStmt st(db,
-      "UPDATE deal_filters SET name=?,description=?,predicate_json=?,sort_order=?,"
+      "UPDATE deposit_filters SET name=?,description=?,buckets_json=?,sort_order=?,"
       "updated_at=? WHERE id=?");
    st.BindText(1, f.name);
    st.BindText(2, f.description);
-   st.BindText(3, DealFilterPredJson(f));
+   st.BindText(3, BucketsToJson(f.buckets));
    st.BindInt (4, f.sort_order);
    st.BindI64 (5, now);
    st.BindI64 (6, f.id);
@@ -431,10 +455,10 @@ bool DealFilterRepo::Update(SqliteDb& db, DealFilter& f)
    return true;
 }
 
-bool DealFilterRepo::Delete(SqliteDb& db, int64_t id)
+bool DepositFilterRepo::Delete(SqliteDb& db, int64_t id)
 {
    std::lock_guard<std::mutex> lock(db.Mutex());
-   SqliteStmt st(db, "DELETE FROM deal_filters WHERE id=?");
+   SqliteStmt st(db, "DELETE FROM deposit_filters WHERE id=?");
    st.BindI64(1, id);
    st.Step();
    return true;
@@ -949,17 +973,21 @@ namespace
       r.updated_at         = st.ColI64(11);
       r.folder_id          = st.IsNull(12) ? 0 : st.ColI64(12);
       r.sort_order         = st.ColInt(13);
+      r.deposit_filter_id  = st.IsNull(14) ? 0 : st.ColI64(14);
    }
 }
+
+namespace { constexpr const char* kReadyMadeCols =
+   "id,name,description,template_id,account_filter_id,date_strategy,"
+   "fixed_dates_json,relative_preset,relative_n,top_n_override,created_at,updated_at,folder_id,"
+   "sort_order,deposit_filter_id"; }
 
 std::vector<ReadyMadeReport> ReadyMadeRepo::ListAll(SqliteDb& db)
 {
    std::lock_guard<std::mutex> lock(db.Mutex());
    std::vector<ReadyMadeReport> out;
    SqliteStmt st(db,
-      "SELECT id,name,description,template_id,account_filter_id,date_strategy,"
-      "fixed_dates_json,relative_preset,relative_n,top_n_override,created_at,updated_at,folder_id,"
-      "sort_order FROM ready_made_reports ORDER BY sort_order, id");
+      std::string("SELECT ") + kReadyMadeCols + " FROM ready_made_reports ORDER BY sort_order, id");
    while(st.Step())
    {
       ReadyMadeReport r; FillReadyMadeFromStmt(st, r);
@@ -972,9 +1000,7 @@ std::optional<ReadyMadeReport> ReadyMadeRepo::Get(SqliteDb& db, int64_t id)
 {
    std::lock_guard<std::mutex> lock(db.Mutex());
    SqliteStmt st(db,
-      "SELECT id,name,description,template_id,account_filter_id,date_strategy,"
-      "fixed_dates_json,relative_preset,relative_n,top_n_override,created_at,updated_at,folder_id,"
-      "sort_order FROM ready_made_reports WHERE id=?");
+      std::string("SELECT ") + kReadyMadeCols + " FROM ready_made_reports WHERE id=?");
    st.BindI64(1, id);
    if(!st.Step()) return std::nullopt;
    ReadyMadeReport r; FillReadyMadeFromStmt(st, r);
@@ -988,7 +1014,8 @@ int64_t ReadyMadeRepo::Insert(SqliteDb& db, ReadyMadeReport& r)
    SqliteStmt st(db,
       "INSERT INTO ready_made_reports(name,description,template_id,account_filter_id,"
       "date_strategy,fixed_dates_json,relative_preset,relative_n,top_n_override,"
-      "created_at,updated_at,folder_id,sort_order) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)");
+      "created_at,updated_at,folder_id,sort_order,deposit_filter_id) "
+      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
    st.BindText(1, r.name);
    st.BindText(2, r.description);
    st.BindI64 (3, r.template_id);
@@ -1002,6 +1029,7 @@ int64_t ReadyMadeRepo::Insert(SqliteDb& db, ReadyMadeReport& r)
    st.BindI64 (11, now);
    if(r.folder_id) st.BindI64(12, r.folder_id); else st.BindNull(12);
    st.BindInt (13, r.sort_order);
+   if(r.deposit_filter_id) st.BindI64(14, r.deposit_filter_id); else st.BindNull(14);
    st.Step();
    r.id = db.LastInsertRowid();
    r.created_at = r.updated_at = now;
@@ -1015,7 +1043,7 @@ bool ReadyMadeRepo::Update(SqliteDb& db, ReadyMadeReport& r)
    SqliteStmt st(db,
       "UPDATE ready_made_reports SET name=?,description=?,template_id=?,account_filter_id=?,"
       "date_strategy=?,fixed_dates_json=?,relative_preset=?,relative_n=?,top_n_override=?,"
-      "updated_at=?,folder_id=?,sort_order=? WHERE id=?");
+      "updated_at=?,folder_id=?,sort_order=?,deposit_filter_id=? WHERE id=?");
    st.BindText(1, r.name);
    st.BindText(2, r.description);
    st.BindI64 (3, r.template_id);
@@ -1028,7 +1056,8 @@ bool ReadyMadeRepo::Update(SqliteDb& db, ReadyMadeReport& r)
    st.BindI64 (10, now);
    if(r.folder_id) st.BindI64(11, r.folder_id); else st.BindNull(11);
    st.BindInt (12, r.sort_order);
-   st.BindI64 (13, r.id);
+   if(r.deposit_filter_id) st.BindI64(13, r.deposit_filter_id); else st.BindNull(13);
+   st.BindI64 (14, r.id);
    st.Step();
    r.updated_at = now;
    return true;

@@ -780,6 +780,15 @@ void Engine::Run(AppContext& ctx, int64_t job_id)
    json params = json::parse(job.params_json, nullptr, false);
    if(params.is_discarded()) throw std::runtime_error("bad params_json");
 
+   //--- Active DepositFilter (multi-bucket cash-flow preset). The
+   //--- new sum_deposit_amount / count_deposits / sum_deposit_abs
+   //--- fields resolve their bucket key against this filter at eval
+   //--- time. Null when the ready-made hasn't bound one — fields
+   //--- then return 0.
+   std::optional<DepositFilter> df;
+   const int64_t df_id = params.value("deposit_filter_id", (int64_t)0);
+   if(df_id) df = DepositFilterRepo::Get(*ctx.db, df_id);
+
    //--- Resolve date params (string YYYY-MM-DD → Unix midnight) ---
    std::map<std::string, int64_t> date_params;
    const json& dates_obj = params.contains("dates") ? params["dates"] : json::object();
@@ -1113,6 +1122,7 @@ void Engine::Run(AppContext& ctx, int64_t job_id)
       ec.history_orders = rc.history_orders_view ? rc.history_orders_view : &rc.history_orders_owned;
       ec.date_params    = &date_params;
       ec.filters        = &filters;
+      ec.deposit_filter = df ? &(*df) : nullptr;
       ec.bucket_users   = &rc.bucket_users;
       ec.bucket_accounts = &rc.bucket_accounts;
       ec.pivot_key_text = rc.pivot_text;

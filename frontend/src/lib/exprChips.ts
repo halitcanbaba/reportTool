@@ -7,7 +7,7 @@ import { parseExpression, formatExpression, formatPredicate } from './exprParser
 export type ChipOp = '+' | '-' | '*' | '/';
 
 export type Chip =
-  | { id: string; kind: 'field';     name: string; args: string[]; predicate?: Predicate }
+  | { id: string; kind: 'field';     name: string; args: string[]; predicate?: Predicate; bucket?: string }
   | { id: string; kind: 'col_ref';   key:  string }
   | { id: string; kind: 'blueprint'; name: string; inner: Chip[] }
   | { id: string; kind: 'literal';   value: number }
@@ -33,6 +33,7 @@ function flatten(node: ExprNode): Chip[] {
   if (node.type === 'field') {
     const chip: Chip = { id: newChipId(), kind: 'field', name: node.name, args: [...node.args] };
     if (node.predicate) chip.predicate = node.predicate;
+    if (node.bucket)    chip.bucket    = node.bucket;
     return [chip];
   }
 
@@ -88,7 +89,26 @@ function chipText(c: Chip): string {
 }
 
 export function chipsToAst(chips: Chip[]): ExprNode {
-  return parseExpression(chipsToText(chips));
+  const ast = parseExpression(chipsToText(chips));
+  //--- Text round-trip loses ExprField.bucket (the parser doesn't have a
+  //--- text syntax for it). Walk the AST and the chip list in lock-step
+  //--- left-to-right to graft bucket back onto the matching field nodes.
+  const fieldChips = chips.filter(c => c.kind === 'field') as Extract<Chip, { kind: 'field' }>[];
+  if (fieldChips.some(c => c.bucket)) {
+    let idx = 0;
+    const visit = (n: ExprNode) => {
+      if (n.type === 'field') {
+        if (idx < fieldChips.length && fieldChips[idx].bucket) {
+          (n as { bucket?: string }).bucket = fieldChips[idx].bucket;
+        }
+        idx++;
+      } else if (n.type === 'binop') {
+        visit(n.left); visit(n.right);
+      }
+    };
+    visit(ast);
+  }
+  return ast;
 }
 
 //--- AST → text (re-export for convenience) -----------------------

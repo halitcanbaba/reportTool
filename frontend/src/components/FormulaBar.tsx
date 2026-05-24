@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useDroppable } from '@dnd-kit/core';
 import type { Column, FieldCatalog, FieldDef, Predicate } from '../types';
 import type { Chip, ChipOp } from '../lib/exprChips';
@@ -6,6 +6,7 @@ import { astToChips, astToText, chipsToAst, newChipId } from '../lib/exprChips';
 import { FieldPickerBody } from './FieldPicker';
 import { PredicateEditor } from './PredicateEditor';
 import { BlueprintPicker } from './BlueprintPicker';
+import { DepositFiltersAPI } from '../api/depositFilters';
 
 type Props = {
   chips: Chip[];
@@ -33,6 +34,20 @@ function makeFieldChip(f: FieldDef, dateParams: string[]): Chip {
 }
 
 export function FormulaBar({ chips, onChipsChange, catalog, dateParams, path, refCandidates }: Props) {
+  //--- Union of every bucket key across all saved DepositFilters — fuels the
+  //--- <datalist> autocomplete on deposit-bucket field chips. Empty until
+  //--- the user has saved at least one filter; chips still accept free text.
+  const [bucketKeys, setBucketKeys] = useState<string[]>([]);
+  useEffect(() => {
+    DepositFiltersAPI.list()
+      .then(fs => {
+        const seen = new Set<string>();
+        for (const f of fs) for (const b of f.buckets) seen.add(b.key);
+        setBucketKeys(Array.from(seen).sort());
+      })
+      .catch(() => {});
+  }, []);
+
   const insertAt = (idx: number, chip: Chip) => {
     const next = chips.slice();
     next.splice(idx, 0, chip);
@@ -62,6 +77,10 @@ export function FormulaBar({ chips, onChipsChange, catalog, dateParams, path, re
 
   return (
     <div className="flex items-center flex-wrap gap-0.5 p-2 bg-white border border-ink-200 rounded min-h-[3rem]">
+      {/*--- Shared autocomplete source for deposit-bucket field chips. ---*/}
+      <datalist id="deposit-bucket-keys">
+        {bucketKeys.map(k => <option key={k} value={k} />)}
+      </datalist>
       <InsertionSlot index={0} path={path} catalog={catalog} dateParams={dateParams}
                      refCandidates={refCandidates}
                      onInsert={(c) => insertAt(0, c)}
@@ -224,10 +243,22 @@ function FieldChipView({ chip, field, catalog, dateParams, onChange, onDelete }:
     ? (catalog.filterable_by_source?.[field.source] ?? [])
     : [];
 
+  //--- Deposit-bucket fields (FieldCatalog category "K") need a bucket key
+  //--- alongside their date args. Use a datalist for autocomplete from any
+  //--- DepositFilter the user has saved.
+  const isDepositBucketField = field?.category === 'K';
+
   const setPredicate = (p: Predicate | null) => {
     const next = { ...chip };
     if (p) next.predicate = p;
     else   delete (next as any).predicate;
+    onChange(next);
+  };
+
+  const setBucket = (key: string) => {
+    const next = { ...chip };
+    if (key) next.bucket = key;
+    else     delete (next as any).bucket;
     onChange(next);
   };
 
@@ -258,6 +289,20 @@ function FieldChipView({ chip, field, catalog, dateParams, onChange, onDelete }:
       {field && (
         <span className="text-[10px] text-emerald-600 ml-1 font-mono select-none" title={field.label}>
           {field.return_type}
+        </span>
+      )}
+      {isDepositBucketField && (
+        <span className="inline-flex items-center gap-1 ml-1.5 px-1 rounded border border-purple-300 bg-purple-50">
+          <span className="text-[10px] text-purple-700 font-mono uppercase tracking-wide">bucket</span>
+          <input
+            type="text"
+            list="deposit-bucket-keys"
+            className="bg-white border border-purple-200 rounded text-xs px-1 py-0 w-28 font-mono"
+            placeholder="cash_deposit"
+            value={chip.bucket ?? ''}
+            onChange={e => setBucket(e.target.value.trim())}
+            title="Bucket key from the active Deposit Filter (resolved at run time)"
+          />
         </span>
       )}
       {supportsFilter && (

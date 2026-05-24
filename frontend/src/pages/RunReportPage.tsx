@@ -3,11 +3,12 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { TemplatesAPI } from '../api/templates';
 import { ManagersAPI } from '../api/managers';
 import { ReportsAPI } from '../api/reports';
+import { DepositFiltersAPI } from '../api/depositFilters';
 import { AccountFilterPicker } from '../components/AccountFilterPicker';
 import { DateParamsForm } from '../components/DateParamsForm';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import { resolvePreset } from '../lib/dateRange';
-import type { Manager, RunReportRequest, Template } from '../types';
+import type { DepositFilter, Manager, RunReportRequest, Template } from '../types';
 
 export function RunReportPage() {
   const { id } = useParams();
@@ -16,6 +17,8 @@ export function RunReportPage() {
   const [managers, setManagers] = useState<Manager[]>([]);
   const [managerId, setManagerId] = useState<number | null>(null);
   const [accountFilterId, setAccountFilterId] = useState<number | null>(null);
+  const [depositFilters, setDepositFilters] = useState<DepositFilter[]>([]);
+  const [depositFilterId, setDepositFilterId] = useState<number | null>(null);
   const [dates, setDates] = useState<Record<string, string>>({});
   const [topN, setTopN] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -37,6 +40,7 @@ export function RunReportPage() {
       setDates(d);
     });
     ManagersAPI.list().then(setManagers).then(() => {});
+    DepositFiltersAPI.list().then(setDepositFilters).catch(() => {});
   }, [id]);
 
   useEffect(() => {
@@ -52,6 +56,7 @@ export function RunReportPage() {
       template_id: tpl.id,
       manager_id:  managerId,
       account_filter_id: accountFilterId ?? undefined,
+      deposit_filter_id: depositFilterId ?? undefined,
       dates,
       top_n: topN,
     };
@@ -94,6 +99,21 @@ export function RunReportPage() {
           <div>
             <label className="label">Account filter</label>
             <AccountFilterPicker value={accountFilterId} managerId={managerId} onChange={setAccountFilterId} />
+          </div>
+        </div>
+
+        <div>
+          <label className="label">Deposit filter (optional)</label>
+          <select className="input" value={depositFilterId ?? ''}
+                  onChange={e => setDepositFilterId(e.target.value ? Number(e.target.value) : null)}>
+            <option value="">— none —</option>
+            {depositFilters.map(f => (
+              <option key={f.id} value={f.id}>{f.name} ({f.buckets.length} bucket{f.buckets.length === 1 ? '' : 's'})</option>
+            ))}
+          </select>
+          <div className="text-xs text-ink-500 mt-1">
+            Required for templates that reference <span className="font-mono">sum_deposit_amount</span> /
+            <span className="font-mono"> count_deposits</span>.
           </div>
         </div>
 

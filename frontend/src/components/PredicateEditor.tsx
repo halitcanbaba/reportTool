@@ -1,9 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type {
   FilterableField, FilterOp, Predicate, PredCmp, PredAnd, PredOr, PredNot,
-  DealFilter,
 } from '../types';
-import { DealFiltersAPI } from '../api/dealFilters';
 
 type Props = {
   source:     'deal' | 'daily' | 'position' | 'order_open' | 'order_hist' | 'user';
@@ -66,68 +64,11 @@ export function PredicateEditor({ source, filterable, predicate, onChange }: Pro
     onChange({ kind: 'and', items: [predicate, fresh] });
   };
 
-  //--- Snapshot-import a saved deal filter into the inline predicate. Only
-  //--- offered for source='deal' since other sources don't have a saved
-  //--- entity yet. Pure replace: any in-flight conditions are discarded —
-  //--- caller's responsibility to confirm.
-  const [showImport, setShowImport] = useState(false);
-  const [savedFilters, setSavedFilters] = useState<DealFilter[] | null>(null);
-  const [importError, setImportError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (source !== 'deal' || !showImport || savedFilters !== null) return;
-    DealFiltersAPI.list()
-      .then(setSavedFilters)
-      .catch(e => setImportError(e.message ?? 'failed to load saved filters'));
-  }, [source, showImport, savedFilters]);
-
-  const importSaved = (f: DealFilter) => {
-    if (predicate && !confirm('Replace current predicate with this saved filter?')) return;
-    onChange(f.predicate);
-    setShowImport(false);
-  };
-
   return (
     <div className="space-y-2">
-      <div className="text-[11px] text-ink-500 flex items-center gap-2 flex-wrap">
-        <span>Source: <code className="font-mono">{source}</code> · filters apply to each row before aggregating.</span>
-        {source === 'deal' && (
-          <button type="button" className="text-xs text-blue-600 hover:underline ml-auto"
-                  onClick={() => setShowImport(true)}
-                  title="Replace the current predicate with a saved Deal Filter">
-            📋 Import saved deal filter…
-          </button>
-        )}
+      <div className="text-[11px] text-ink-500">
+        Source: <code className="font-mono">{source}</code> · filters apply to each row before aggregating.
       </div>
-
-      {showImport && source === 'deal' && (
-        <div className="border border-blue-200 bg-blue-50/60 rounded p-3 space-y-2">
-          <div className="flex items-center">
-            <span className="text-xs font-semibold text-ink-700">Pick a saved deal filter</span>
-            <button type="button" className="ml-auto text-xs text-ink-500 hover:text-ink-700"
-                    onClick={() => setShowImport(false)}>✕ close</button>
-          </div>
-          {importError && <div className="text-xs text-red-600">{importError}</div>}
-          {savedFilters === null && !importError && <div className="text-xs text-ink-400">Loading…</div>}
-          {savedFilters && savedFilters.length === 0 && (
-            <div className="text-xs text-ink-500">No saved deal filters yet — create one on the Deal Filters page.</div>
-          )}
-          {savedFilters && savedFilters.length > 0 && (
-            <ul className="space-y-1 max-h-48 overflow-y-auto">
-              {savedFilters.map(f => (
-                <li key={f.id}>
-                  <button type="button"
-                          className="w-full text-left px-2 py-1.5 rounded bg-white border border-ink-200 hover:border-blue-400 hover:bg-blue-50 text-xs"
-                          onClick={() => importSaved(f)}>
-                    <span className="font-medium">{f.name}</span>
-                    {f.description && <span className="text-ink-500 ml-2">— {f.description}</span>}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
 
       {!predicate ? (
         <div>

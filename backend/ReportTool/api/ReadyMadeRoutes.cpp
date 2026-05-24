@@ -27,6 +27,7 @@ namespace
          { "description",       r.description },
          { "template_id",       r.template_id },
          { "account_filter_id", r.account_filter_id ? json(r.account_filter_id) : json(nullptr) },
+         { "deposit_filter_id", r.deposit_filter_id ? json(r.deposit_filter_id) : json(nullptr) },
          { "date_strategy",     r.date_strategy },
          { "fixed_dates",       json::parse(r.fixed_dates_json, nullptr, false).is_object()
                                     ? json::parse(r.fixed_dates_json)
@@ -53,6 +54,8 @@ namespace
          r->template_id = j["template_id"].get<int64_t>();
          r->account_filter_id = j.contains("account_filter_id") && !j["account_filter_id"].is_null()
                                 ? j["account_filter_id"].get<int64_t>() : 0;
+         r->deposit_filter_id = j.contains("deposit_filter_id") && !j["deposit_filter_id"].is_null()
+                                ? j["deposit_filter_id"].get<int64_t>() : 0;
          r->date_strategy = j.value("date_strategy", std::string("relative"));
          if(r->date_strategy != "fixed" && r->date_strategy != "relative")
             { *err = "date_strategy must be 'fixed' or 'relative'"; return false; }
@@ -145,6 +148,8 @@ void ReadyMadeRoutes::Register(httplib::Server& srv, AppContext* ctx)
             if(it.value().is_string()) params["dates"][it.key()] = it.value().get<std::string>();
       if(over.contains("account_filter_id"))
          params["account_filter_id"] = over["account_filter_id"];
+      if(over.contains("deposit_filter_id"))
+         params["deposit_filter_id"] = over["deposit_filter_id"];
       if(over.contains("top_n"))
          params["top_n"] = over["top_n"];
 

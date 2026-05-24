@@ -1,12 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                              MT5 ReportTool      |
-//|     DealFilterRoutes.h - CRUD + preview for saved deal filters   |
+//|     DepositFilterRoutes.h — CRUD + preview for deposit filters   |
+//|     (multi-bucket cash-flow classification presets)              |
 //+------------------------------------------------------------------+
 #pragma once
 #include "AppContext.h"
 namespace httplib { class Server; }
 
-namespace DealFilterRoutes
+namespace DepositFilterRoutes
 {
    void Register(httplib::Server& srv, AppContext* ctx);
 }

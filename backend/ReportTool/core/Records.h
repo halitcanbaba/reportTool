@@ -302,21 +302,27 @@ struct AccountFilter
    int64_t                   updated_at  = 0;
 };
 
-//--- Saved cash-flow classifier: a named Predicate over the 'deal' source.
-//--- Users define these once ("Cash deposit, not partner promo") and then
-//--- import them into any formula aggregator's predicate slot from the
-//--- PredicateEditor UI. Snapshot semantics: imports copy the predicate
-//--- tree into the formula; later edits to the saved filter do not
-//--- propagate (Predicate::Kind::Saved live-reference is a future scope).
-struct DealFilter
+//--- DepositFilter — multi-bucket cash-flow classifier preset, bound to a
+//--- ready-made report at run time. Each bucket is a named Predicate over
+//--- the 'deal' source; templates reference bucket keys via new aggregator
+//--- fields (sum_deposit_amount / count_deposits / sum_deposit_abs).
+//--- Lets per-broker conventions be captured once ("Trive uses 'PROMO' in
+//--- comment to mark promo deposits") and reused across templates.
+struct DepositFilterBucket
 {
-   int64_t                    id          = 0;
-   std::string                name;
-   std::string                description;
-   std::shared_ptr<Predicate> predicate;
-   int                        sort_order  = 0;
-   int64_t                    created_at  = 0;
-   int64_t                    updated_at  = 0;
+   std::string                key;        // machine name, unique within filter ("cash_deposit")
+   std::string                label;      // display label ("Cash Deposit")
+   std::shared_ptr<Predicate> predicate;  // deal-source predicate
+};
+struct DepositFilter
+{
+   int64_t                          id          = 0;
+   std::string                      name;
+   std::string                      description;
+   std::vector<DepositFilterBucket> buckets;
+   int                              sort_order  = 0;
+   int64_t                          created_at  = 0;
+   int64_t                          updated_at  = 0;
 };
 
 //--- Per-aggregator predicate over the underlying row (deal/daily/position/order).
@@ -398,6 +404,12 @@ struct ExprNode
    std::string field_name;
    std::vector<std::string> field_args;   // date_param names; arity defined by FieldCatalog
    std::shared_ptr<Predicate> predicate;  // optional per-row filter for aggregator fields
+   //--- For deposit-bucket fields (sum_deposit_amount / count_deposits /
+   //--- sum_deposit_abs): bucket key from the active DepositFilter at run
+   //--- time. Empty for other fields. Lets the same template run with
+   //--- different per-broker conventions by swapping the ready-made's
+   //--- deposit_filter binding.
+   std::string bucket;
 
    //--- BinOp
    char        op = '+';                   // '+' '-' '*' '/'
@@ -510,6 +522,10 @@ struct ReadyMadeReport
    std::string  description;
    int64_t      template_id        = 0;
    int64_t      account_filter_id  = 0;     // 0 = none
+   //--- v15: bound DepositFilter (multi-bucket cash-flow preset). 0 = none;
+   //--- sum_deposit_amount / count_deposits formula fields return 0 when
+   //--- unbound. Per-run override available via ReadyMadeRunRequest.
+   int64_t      deposit_filter_id  = 0;
 
    std::string  date_strategy;              // "fixed" | "relative"
    std::string  fixed_dates_json;            // JSON object: { "date_from":"YYYY-MM-DD", ... }

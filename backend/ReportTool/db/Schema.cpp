@@ -3,7 +3,7 @@
 
 namespace
 {
-   constexpr int kCurrentSchemaVersion = 14;
+   constexpr int kCurrentSchemaVersion = 15;
 
    //--- Tables that survive every version (managers, regex_filters,
    //--- daily_cache, deal_cache). These are idempotent.
@@ -414,6 +414,39 @@ namespace
       if(!db.Exec(kV14Tables, err)) return false;
       return WriteVersion(db, 14, err);
    }
+
+   //--- v14 → v15: deal_filters → deposit_filters. Single-predicate Deal
+   //--- Filter shipped in v14 is replaced by a multi-bucket Deposit Filter
+   //--- preset (cash_deposit / promotion / rebate / …). buckets_json is a
+   //--- JSON array of {key,label,predicate} objects. Ready-made reports
+   //--- pick a Deposit Filter; the engine resolves bucket predicates at
+   //--- run time so the same template runs with per-broker conventions.
+   //--- Drop deal_filters since the entity has no production users yet.
+   const char* kV15Tables = R"SQL(
+      DROP TABLE IF EXISTS deal_filters;
+      CREATE TABLE IF NOT EXISTS deposit_filters (
+         id           INTEGER PRIMARY KEY AUTOINCREMENT,
+         name         TEXT NOT NULL UNIQUE,
+         description  TEXT NOT NULL DEFAULT '',
+         buckets_json TEXT NOT NULL DEFAULT '[]',
+         sort_order   INTEGER NOT NULL DEFAULT 0,
+         created_at   INTEGER NOT NULL,
+         updated_at   INTEGER NOT NULL
+      );
+   )SQL";
+
+   bool MigrateToV15(SqliteDb& db, std::string* err)
+   {
+      if(!db.Exec(kV15Tables, err)) return false;
+      //--- Nullable FK so legacy ready-mades render correctly with no
+      //--- filter selected. Engine treats null as "no deposit_filter" and
+      //--- new sum_deposit_amount / count_deposits fields return 0.
+      if(!db.Exec(
+         "ALTER TABLE ready_made_reports ADD COLUMN deposit_filter_id INTEGER NULL "
+         "REFERENCES deposit_filters(id) ON DELETE SET NULL", err))
+         return false;
+      return WriteVersion(db, 15, err);
+   }
 }
 
 bool Schema::Apply(SqliteDb& db, std::string* err)
@@ -462,8 +495,12 @@ bool Schema::Apply(SqliteDb& db, std::string* err)
             if(!db.Exec(sql, err)) return false;
          }
       }
-      //--- v14: deal_filters table for saved cash-flow predicate classifiers.
-      if(!db.Exec(kV14Tables, err)) return false;
+      //--- v14: deal_filters (replaced in v15) — skip on fresh install.
+      //--- v15: deposit_filters table + ready_made_reports.deposit_filter_id.
+      if(!db.Exec(kV15Tables, err)) return false;
+      if(!db.Exec(
+         "ALTER TABLE ready_made_reports ADD COLUMN deposit_filter_id INTEGER NULL "
+         "REFERENCES deposit_filters(id) ON DELETE SET NULL", err)) return false;
       return WriteVersion(db, kCurrentSchemaVersion, err);
    }
    if(v < 2)
@@ -517,6 +554,10 @@ bool Schema::Apply(SqliteDb& db, std::string* err)
    if(v < 14)
    {
       if(!MigrateToV14(db, err)) return false;
+   }
+   if(v < 15)
+   {
+      if(!MigrateToV15(db, err)) return false;
    }
    //--- v >= current: no-op.
    return true;

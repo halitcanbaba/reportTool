@@ -348,6 +348,7 @@ json Scheduler::BuildRunParams(const ReadyMadeReport& rm,
       { "dates",       dates },
    };
    if(rm.account_filter_id) out["account_filter_id"] = rm.account_filter_id;
+   if(rm.deposit_filter_id) out["deposit_filter_id"] = rm.deposit_filter_id;
    if(rm.top_n_override)    out["top_n"]             = rm.top_n_override;
    return out;
 }

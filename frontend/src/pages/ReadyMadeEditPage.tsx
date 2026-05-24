@@ -3,15 +3,17 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ReadyMadeAPI } from '../api/readyMade';
 import { TemplatesAPI } from '../api/templates';
 import { AccountFiltersAPI } from '../api/accountFilters';
+import { DepositFiltersAPI } from '../api/depositFilters';
 import { DateStrategyPicker } from '../components/DateStrategyPicker';
 import { Breadcrumbs } from '../components/Breadcrumbs';
-import type { ReadyMadeReportInput, Template, AccountFilter } from '../types';
+import type { ReadyMadeReportInput, Template, AccountFilter, DepositFilter } from '../types';
 
 const empty: ReadyMadeReportInput = {
   name: '',
   description: '',
   template_id: 0,
   account_filter_id: null,
+  deposit_filter_id: null,
   date_strategy: 'relative',
   fixed_dates: {},
   relative_preset: 'yesterday',
@@ -27,12 +29,14 @@ export function ReadyMadeEditPage() {
   const [form, setForm] = useState<ReadyMadeReportInput>(empty);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [filters, setFilters] = useState<AccountFilter[]>([]);
+  const [depositFilters, setDepositFilters] = useState<DepositFilter[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     TemplatesAPI.list().then(setTemplates).catch(() => {});
     AccountFiltersAPI.list().then(setFilters).catch(() => {});
+    DepositFiltersAPI.list().then(setDepositFilters).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -43,6 +47,7 @@ export function ReadyMadeEditPage() {
         description: rm.description,
         template_id: rm.template_id,
         account_filter_id: rm.account_filter_id,
+        deposit_filter_id: rm.deposit_filter_id ?? null,
         date_strategy: rm.date_strategy,
         fixed_dates: rm.fixed_dates ?? {},
         relative_preset: rm.relative_preset,
@@ -132,6 +137,20 @@ export function ReadyMadeEditPage() {
             </select>
             <div className="text-xs text-ink-500 mt-1">
               Bound filters carry their own manager; generic filters require a manager override at run time.
+            </div>
+          </div>
+          <div>
+            <label className="label">Deposit filter (optional)</label>
+            <select className="input" value={form.deposit_filter_id ?? ''}
+                    onChange={e => update('deposit_filter_id', e.target.value ? Number(e.target.value) : null)}>
+              <option value="">— none —</option>
+              {depositFilters.map(f => (
+                <option key={f.id} value={f.id}>{f.name} ({f.buckets.length} bucket{f.buckets.length === 1 ? '' : 's'})</option>
+              ))}
+            </select>
+            <div className="text-xs text-ink-500 mt-1">
+              Required for templates that use <span className="font-mono">sum_deposit_amount</span> /
+              <span className="font-mono"> count_deposits</span> fields; otherwise those return 0.
             </div>
           </div>
         </div>

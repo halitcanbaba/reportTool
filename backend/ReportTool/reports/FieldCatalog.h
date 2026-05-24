@@ -66,9 +66,12 @@ namespace FieldCatalog
    const Field*              Lookup(const std::string& name);
 
    //--- Throws std::runtime_error on unknown name / missing source / wrong arity.
+   //--- `bucket` is the optional bucket key for deposit-bucket fields (resolved
+   //--- against ctx.deposit_filter at eval time); empty for all other fields.
    double                    EvaluateNumeric(const std::string& name,
                                              const std::vector<std::string>& args,
                                              const Predicate* predicate,
+                                             const std::string& bucket,
                                              const EvalContext& ctx);
    std::string               EvaluateText(const std::string& name,
                                           const EvalContext& ctx);
