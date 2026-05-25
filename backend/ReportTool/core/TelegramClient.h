@@ -16,9 +16,13 @@ namespace TelegramClient
    };
 
    //--- POST https://api.telegram.org/bot<token>/sendMessage
+   //--- `parse_mode` controls Telegram-side formatting: "" (plain),
+   //--- "HTML" (<b>/<i>/<code>/<pre>/<a> subset), or "MarkdownV2".
+   //--- Telegram caps messages at 4096 chars; callers truncate ahead.
    Result SendMessage(const std::string& bot_token,
                       const std::string& chat_id,
-                      const std::string& text);
+                      const std::string& text,
+                      const std::string& parse_mode = "");
 
    //--- POST https://api.telegram.org/bot<token>/sendDocument
    //--- Streams `file_path` as multipart form data (≤ 50 MB per Telegram).

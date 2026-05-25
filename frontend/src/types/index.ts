@@ -306,7 +306,12 @@ export type ReadyMadeRunRequest = {
 //--- Scheduler -----------------------------------------------------
 
 export type ScheduleFrequency = 'daily' | 'weekly' | 'monthly' | 'hourly';
-export type ScheduleDeliveryFormat = 'csv' | 'text';
+//--- 'text'  - HTML-formatted summary message (bold title + KPI block)
+//--- 'csv'   - csv file produced by the engine (server-persisted)
+//--- 'xlsx'  - typed-cell spreadsheet generated on delivery from the CSV
+//--- 'pdf'   - tabular PDF generated on delivery (Helvetica + Courier)
+//--- 'image' - PNG screenshot of the result page (headless Chrome required)
+export type ScheduleDeliveryFormat = 'csv' | 'text' | 'xlsx' | 'pdf' | 'image';
 
 export type ScheduleEntry = {
   id: number;

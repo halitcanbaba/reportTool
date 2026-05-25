@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { SchedulesAPI } from '../api/schedules';
 import { ReadyMadeAPI } from '../api/readyMade';
 import { Breadcrumbs } from '../components/Breadcrumbs';
-import type { ScheduleEntryInput, ReadyMadeReport, ScheduleFrequency } from '../types';
+import type { ScheduleEntryInput, ReadyMadeReport, ScheduleFrequency, ScheduleDeliveryFormat } from '../types';
 
 const empty: ScheduleEntryInput = {
   name: '',
@@ -251,12 +251,16 @@ export function ScheduleEditPage() {
             <label className="label">Send as</label>
             <select className="input"
                     value={form.delivery_format}
-                    onChange={e => update('delivery_format', e.target.value as 'csv' | 'text')}>
-              <option value="csv">CSV file</option>
-              <option value="text">Text summary</option>
+                    onChange={e => update('delivery_format', e.target.value as ScheduleDeliveryFormat)}>
+              <option value="csv">CSV file (raw, full dataset)</option>
+              <option value="xlsx">XLSX spreadsheet (typed cells)</option>
+              <option value="pdf">PDF document (tabular print)</option>
+              <option value="image">Screenshot PNG (headless Chrome)</option>
+              <option value="text">Text summary (HTML formatted)</option>
             </select>
             <div className="text-[11px] text-ink-500 mt-1">
-              CSV attaches the full report; Text sends a short message (template, period, row count).
+              <span className="font-mono">image</span> needs Chrome / Edge on the server and a working
+              public URL; falls back to a text notice if either is missing.
             </div>
           </div>
           <div>

@@ -5,6 +5,9 @@
 #include "../stdafx.h"
 #include "Scheduler.h"
 #include "TelegramClient.h"
+#include "XlsxWriter.h"
+#include "PdfWriter.h"
+#include "ChromeRenderer.h"
 #include "Crypto.h"
 #include "TimeUtil.h"
 #include "../api/AppContext.h"
@@ -12,6 +15,11 @@
 #include "../db/Repos.h"
 #include "../reports/Expression.h"
 #include "../reports/FieldCatalog.h"
+#include <fstream>
+#include <sstream>
+#include <random>
+#include <cstdlib>
+#include <windows.h>
 
 using nlohmann::json;
 
@@ -372,6 +380,240 @@ namespace
       if(!Crypto::DecryptB64(enc, &plain)) return "";
       return plain;
    }
+
+   //--- Read full file into memory; returns empty string on error.
+   //--- Used for the XLSX path which needs to parse the job's CSV row by row.
+   std::string ReadFile(const std::string& path)
+   {
+      std::ifstream f(path, std::ios::binary);
+      if(!f) return "";
+      std::ostringstream ss; ss << f.rdbuf();
+      return ss.str();
+   }
+
+   //--- Minimal RFC4180 CSV row parser. Handles quoted fields with embedded
+   //--- commas / newlines / "" escaped quotes. Stateful across calls because
+   //--- a quoted field may span newlines.
+   struct CsvParser {
+      const std::string& src;
+      size_t pos = 0;
+      bool   eof() const { return pos >= src.size(); }
+
+      //--- Parse one record into `out`; returns false at EOF before any data.
+      //--- Empty trailing row (final \n) is treated as EOF.
+      bool NextRow(std::vector<std::string>& out)
+      {
+         out.clear();
+         if(eof()) return false;
+         std::string field;
+         bool in_quotes = false;
+         bool consumed_any = false;
+         while(pos < src.size())
+         {
+            const char c = src[pos++];
+            consumed_any = true;
+            if(in_quotes)
+            {
+               if(c == '"')
+               {
+                  if(pos < src.size() && src[pos] == '"') { field += '"'; ++pos; }
+                  else                                    { in_quotes = false; }
+               }
+               else field += c;
+            }
+            else
+            {
+               if(c == ',') { out.push_back(std::move(field)); field.clear(); }
+               else if(c == '\r')
+               {
+                  if(pos < src.size() && src[pos] == '\n') ++pos;
+                  out.push_back(std::move(field));
+                  return true;
+               }
+               else if(c == '\n')
+               {
+                  out.push_back(std::move(field));
+                  return true;
+               }
+               else if(c == '"' && field.empty()) { in_quotes = true; }
+               else field += c;
+            }
+         }
+         if(consumed_any) { out.push_back(std::move(field)); return true; }
+         return false;
+      }
+   };
+
+   //--- Build an .xlsx blob from the job's persisted CSV. Reuses the
+   //--- template's per-column format hints to type cells (numeric vs
+   //--- string) — login / count / money / pct columns all land as numbers
+   //--- so Excel can sort and aggregate; text/date stay as strings.
+   std::string BuildXlsxFromJob(SqliteDb& db, const JobRow& job,
+                                 const std::string& sheet_name)
+   {
+      const std::string csv_path = job.output_dir + "/" + job.csv_filename;
+      const std::string csv_text = ReadFile(csv_path);
+      if(csv_text.empty()) return "";
+
+      //--- Pull column formats from the template; fall back to plain strings
+      //--- if the template was deleted between job creation and delivery.
+      std::vector<ColumnSpec::Format> col_formats;
+      auto tpl = TemplateRepo::Get(db, job.template_id);
+      if(tpl) {
+         for(const auto& c : tpl->columns) col_formats.push_back(c.format);
+      }
+
+      auto is_numeric_format = [](ColumnSpec::Format f) {
+         return f == ColumnSpec::Format::Money
+             || f == ColumnSpec::Format::Int
+             || f == ColumnSpec::Format::Pct
+             || f == ColumnSpec::Format::Number;
+      };
+
+      CsvParser p{ csv_text };
+      std::vector<std::string> first;
+      if(!p.NextRow(first)) return "";
+
+      //--- Use template labels as headers when available — the CSV header
+      //--- row uses backend keys (col_1, …) which aren't user-friendly.
+      std::vector<std::string> headers;
+      if(tpl && !tpl->columns.empty()) {
+         for(const auto& c : tpl->columns) headers.push_back(c.label);
+      } else {
+         headers = first;
+      }
+
+      std::vector<std::vector<XlsxWriter::Cell>> rows;
+      std::vector<std::string> raw;
+      while(p.NextRow(raw))
+      {
+         std::vector<XlsxWriter::Cell> row;
+         row.reserve(raw.size());
+         for(size_t i = 0; i < raw.size(); ++i)
+         {
+            XlsxWriter::Cell cell;
+            cell.text = raw[i];
+            //--- Numeric typing: column.format says money/int/pct/number.
+            //--- Identifier-int (login) is also numeric — Excel renders as
+            //--- a plain number with no thousand separators.
+            const bool is_num = i < col_formats.size() && is_numeric_format(col_formats[i]);
+            if(is_num && !cell.text.empty())
+            {
+               //--- Validate parseability so a stray string doesn't break
+               //--- the spreadsheet (Excel rejects sheet1.xml with a
+               //--- non-numeric value inside <v>).
+               char* end = nullptr;
+               (void)std::strtod(cell.text.c_str(), &end);
+               cell.is_number = (end && *end == '\0');
+            }
+            row.push_back(std::move(cell));
+         }
+         rows.push_back(std::move(row));
+      }
+
+      return XlsxWriter::Build(sheet_name, headers, rows);
+   }
+
+   //--- PDF variant: same CSV → header + data rows, but as plain strings
+   //--- (the PdfWriter doesn't type cells — it just monospace-prints).
+   //--- Reuses the same template-aware header substitution so columns
+   //--- display by label rather than raw key.
+   std::string BuildPdfFromJob(SqliteDb& db, const JobRow& job,
+                                const std::string& title)
+   {
+      const std::string csv_path = job.output_dir + "/" + job.csv_filename;
+      const std::string csv_text = ReadFile(csv_path);
+      if(csv_text.empty()) return "";
+
+      auto tpl = TemplateRepo::Get(db, job.template_id);
+
+      CsvParser p{ csv_text };
+      std::vector<std::string> first;
+      if(!p.NextRow(first)) return "";
+
+      std::vector<std::string> headers;
+      if(tpl && !tpl->columns.empty()) {
+         for(const auto& c : tpl->columns) headers.push_back(c.label);
+      } else {
+         headers = first;
+      }
+
+      std::vector<std::vector<std::string>> rows;
+      std::vector<std::string> raw;
+      while(p.NextRow(raw)) rows.push_back(std::move(raw));
+
+      return PdfWriter::Build(title, headers, rows);
+   }
+
+   //--- Return the screenshot bypass token, generating one on first call.
+   //--- Stored under SettingsRepo so it survives restarts and so the
+   //--- pre-routing auth handler can validate it without coordination.
+   std::string EnsureScreenshotToken(SqliteDb& db)
+   {
+      std::string tok = SettingsRepo::Get(db, "screenshot_token");
+      if(!tok.empty()) return tok;
+      //--- 32 hex chars from a non-deterministic source. random_device
+      //--- gives at least OS-grade entropy on Windows (CryptGenRandom).
+      std::random_device rd;
+      static const char* hex = "0123456789abcdef";
+      tok.reserve(32);
+      for(int i = 0; i < 32; ++i) tok += hex[rd() & 0xF];
+      SettingsRepo::Set(db, "screenshot_token", tok);
+      return tok;
+   }
+
+   //--- Read a file's bytes into memory. Returns empty on failure.
+   std::string ReadPngFile(const std::string& path)
+   {
+      std::ifstream f(path, std::ios::binary);
+      if(!f) return "";
+      std::ostringstream ss; ss << f.rdbuf();
+      return ss.str();
+   }
+
+   //--- Build a screenshot of the job result page via headless Chrome.
+   //--- Returns empty bytes on any failure (chrome not installed, render
+   //--- timed out, page didn't load, …); caller falls back to text.
+   std::string BuildScreenshotForJob(SqliteDb& db, const JobRow& job)
+   {
+      if(!ChromeRenderer::Available()) return "";
+
+      //--- Bootstrap URL: backend (nginx-fronted) endpoint that sets the
+      //--- short-lived screenshot cookie then 302s to the result page.
+      //--- screenshot_url_base is the public origin the headless browser
+      //--- should hit — typically http://localhost:<nginx_port>. Defaults
+      //--- to 8090 (the project's nginx convention).
+      std::string base = SettingsRepo::Get(db, "screenshot_url_base");
+      if(base.empty()) base = "http://localhost:8090";
+      const std::string tok = EnsureScreenshotToken(db);
+      const std::string path = "/jobs/" + std::to_string(job.id);
+
+      //--- URL-encode the redirect path (just /).
+      auto urlenc = [](const std::string& s) {
+         std::string out; out.reserve(s.size() * 3);
+         for(unsigned char c : s) {
+            if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+               (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~' || c == '/')
+               out += (char)c;
+            else { char buf[4]; std::snprintf(buf, sizeof(buf), "%%%02X", c); out += buf; }
+         }
+         return out;
+      };
+
+      const std::string url = base + "/api/auth/screenshot-bootstrap?token=" + tok
+                            + "&path=" + urlenc(path);
+
+      //--- Output to user's temp dir so we don't clutter the install dir.
+      char tmp_path[MAX_PATH];
+      if(!GetTempPathA(MAX_PATH, tmp_path)) return "";
+      const std::string out_path = std::string(tmp_path) + "rt_job_"
+                                   + std::to_string(job.id) + ".png";
+
+      if(!ChromeRenderer::RenderPng(url, out_path, 1600, 1024, 30)) return "";
+      std::string png = ReadPngFile(out_path);
+      _unlink(out_path.c_str());
+      return png;
+   }
 }
 
 void Scheduler::TickOnce()
@@ -417,21 +659,108 @@ void Scheduler::TickOnce()
       TelegramClient::Result r;
       if(fmt == "text")
       {
-         //--- Brief summary message; no file attached. Includes total rows
-         //--- when the preview JSON is available, otherwise just the caption.
-         std::string text = caption;
+         //--- Telegram HTML mode: schedule name bolded; KPI block in <pre>
+         //--- so numbers line up monospaced. Escape user-supplied text
+         //--- (schedule name, date strings) to avoid &/</> breaking the
+         //--- parse_mode=HTML payload.
+         auto esc = [](const std::string& s){
+            std::string out; out.reserve(s.size());
+            for(char c : s) {
+               if     (c == '&') out += "&amp;";
+               else if(c == '<') out += "&lt;";
+               else if(c == '>') out += "&gt;";
+               else              out += c;
+            }
+            return out;
+         };
+
+         std::string text = "<b>" + esc(sch.name) + "</b>"
+                          + "  <i>job #" + std::to_string(job->id) + "</i>";
+
+         //--- Resolve date range and basic counts from summary + params.
+         int total_logins = 0, row_count = 0;
+         std::string date_from, date_to;
          if(!job->summary_json.empty())
          {
             auto j = nlohmann::json::parse(job->summary_json, nullptr, false);
-            if(!j.is_discarded())
-            {
-               const int total = j.value("total_logins", 0);
-               const int rows  = j.value("row_count",    0);
-               text += "\nRows: " + std::to_string(rows)
-                     + " · logins: " + std::to_string(total);
+            if(!j.is_discarded()) {
+               total_logins = j.value("total_logins", 0);
+               row_count    = j.value("row_count",    0);
             }
          }
-         r = TelegramClient::SendMessage(token, chat, text);
+         if(!job->params_json.empty())
+         {
+            auto p = nlohmann::json::parse(job->params_json, nullptr, false);
+            if(!p.is_discarded() && p.contains("dates") && p["dates"].is_object())
+            {
+               if(p["dates"].contains("date_from") && p["dates"]["date_from"].is_string())
+                  date_from = p["dates"]["date_from"].get<std::string>();
+               if(p["dates"].contains("date_to") && p["dates"]["date_to"].is_string())
+                  date_to = p["dates"]["date_to"].get<std::string>();
+            }
+         }
+
+         text += "\n<pre>";
+         if(!date_from.empty())
+         {
+            text += "Period   " + esc(date_from);
+            if(!date_to.empty() && date_to != date_from) text += "  →  " + esc(date_to);
+            text += "\n";
+         }
+         text += "Rows     " + std::to_string(row_count) + "\n";
+         text += "Logins   " + std::to_string(total_logins);
+         text += "</pre>";
+
+         //--- Telegram caps at 4096 chars (counting tags). Stay well under.
+         if(text.size() > 3800) text = text.substr(0, 3800) + "…";
+         r = TelegramClient::SendMessage(token, chat, text, "HTML");
+      }
+      else if(fmt == "xlsx")
+      {
+         //--- Built in-memory from the persisted CSV using XlsxWriter.
+         //--- Telegram caps documents at 50 MB; our store-mode zip can
+         //--- inflate a few-MB CSV to a few-MB xlsx — comfortably under.
+         const std::string blob = BuildXlsxFromJob(*m_ctx->db, *job, sch.name);
+         if(blob.empty())
+         {
+            r = TelegramClient::SendMessage(token, chat, caption + " (xlsx build failed)");
+         }
+         else
+         {
+            const std::string fname = sch.name + ".xlsx";
+            const std::string mime  = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+            r = TelegramClient::SendDocumentBytes(token, chat, blob, fname, mime, caption);
+         }
+      }
+      else if(fmt == "pdf")
+      {
+         const std::string blob = BuildPdfFromJob(*m_ctx->db, *job, sch.name);
+         if(blob.empty())
+         {
+            r = TelegramClient::SendMessage(token, chat, caption + " (pdf build failed)");
+         }
+         else
+         {
+            const std::string fname = sch.name + ".pdf";
+            r = TelegramClient::SendDocumentBytes(token, chat, blob, fname, "application/pdf", caption);
+         }
+      }
+      else if(fmt == "image")
+      {
+         //--- Headless Chrome renders the actual result-page SPA, so the
+         //--- screenshot matches what the user sees in their browser.
+         //--- Falls back to a text notice when Chrome isn't installed or
+         //--- the render times out — Telegram still gets a heads-up.
+         const std::string png = BuildScreenshotForJob(*m_ctx->db, *job);
+         if(png.empty())
+         {
+            r = TelegramClient::SendMessage(token, chat, caption + " (screenshot unavailable)");
+         }
+         else
+         {
+            const std::string fname = sch.name + ".png";
+            r = TelegramClient::SendPhotoBytes(token, chat, png, fname, caption);
+         }
       }
       else if(job->csv_filename.empty())
       {

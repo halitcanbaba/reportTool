@@ -205,7 +205,11 @@ void ReportRoutes::Register(httplib::Server& srv, AppContext* ctx)
       {
          const std::string text = Clamp(form_value("text"), 4096);
          if(text.empty()) { SendError(res, 400, "text required for kind=text"); return; }
-         r = TelegramClient::SendMessage(token, chat, text);
+         //--- parse_mode opt-in: "HTML" / "MarkdownV2" / "" (plain).
+         //--- Frontend can pass it to render bold / code blocks; default
+         //--- stays plaintext for backward compat with existing callers.
+         const std::string pm = form_value("parse_mode");
+         r = TelegramClient::SendMessage(token, chat, text, pm);
       }
       else if(kind == "photo" || kind == "document")
       {

@@ -140,9 +140,17 @@ namespace
 TelegramClient::Result
 TelegramClient::SendMessage(const std::string& bot_token,
                              const std::string& chat_id,
-                             const std::string& text)
+                             const std::string& text,
+                             const std::string& parse_mode)
 {
-   const std::string body = "chat_id=" + UrlEncode(chat_id) + "&text=" + UrlEncode(text);
+   std::string body = "chat_id=" + UrlEncode(chat_id) + "&text=" + UrlEncode(text);
+   if(!parse_mode.empty())
+   {
+      body += "&parse_mode=" + UrlEncode(parse_mode);
+      //--- Disable web page previews so a stray URL in the report doesn't
+      //--- expand into a card and push the actual content off the screen.
+      body += "&disable_web_page_preview=true";
+   }
    return Interpret(PostHttps(bot_token, "sendMessage",
                               "application/x-www-form-urlencoded; charset=utf-8", body));
 }

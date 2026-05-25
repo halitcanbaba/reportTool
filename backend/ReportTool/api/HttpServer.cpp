@@ -50,12 +50,33 @@ namespace
    //--- Public routes — no auth needed.
    bool IsPublicPath(const httplib::Request& req)
    {
-      if(req.method == "OPTIONS")                return true;
-      if(req.path == "/health")                  return true;
-      if(req.path == "/api/auth/setup-status")   return true;
-      if(req.path == "/api/auth/setup")          return true;
-      if(req.path == "/api/auth/login")          return true;
+      if(req.method == "OPTIONS")                       return true;
+      if(req.path == "/health")                         return true;
+      if(req.path == "/api/auth/setup-status")          return true;
+      if(req.path == "/api/auth/setup")                 return true;
+      if(req.path == "/api/auth/login")                 return true;
+      //--- Bootstrap that hands the headless browser a screenshot session
+      //--- cookie. Self-validating via query token (auth proof IS the
+      //--- request); no session needed yet.
+      if(req.path == "/api/auth/screenshot-bootstrap")  return true;
       return false;
+   }
+
+   //--- Extract value of a named cookie from a Cookie: header.
+   std::string ExtractCookie(const std::string& header, const std::string& name)
+   {
+      const std::string key = name + "=";
+      size_t i = 0;
+      while(i < header.size())
+      {
+         while(i < header.size() && (header[i] == ' ' || header[i] == ';')) ++i;
+         size_t end = i;
+         while(end < header.size() && header[end] != ';') ++end;
+         if(end - i > key.size() && header.compare(i, key.size(), key) == 0)
+            return header.substr(i + key.size(), end - i - key.size());
+         i = end;
+      }
+      return "";
    }
 
    //--- Path/method combinations that require role=admin.
@@ -154,7 +175,28 @@ void HttpServer::RegisterAuthMiddleware()
          CurrentUser::Clear();
          if(IsPublicPath(req)) return httplib::Server::HandlerResponse::Unhandled;
 
+         //--- Screenshot bot bypass. The bootstrap endpoint sets a
+         //--- short-lived "rt_screenshot" cookie whose value matches the
+         //--- server-side `screenshot_token` setting; subsequent /api/*
+         //--- requests from the headless browser carry it automatically.
+         //--- Treated as anonymous read-only access — admin-only routes
+         //--- still 403 because no user/role is attached.
          const std::string cookie = req.get_header_value("Cookie");
+         const std::string ss = ExtractCookie(cookie, "rt_screenshot");
+         if(!ss.empty()) {
+            const std::string expected = SettingsRepo::Get(*ctx->db, "screenshot_token");
+            if(!expected.empty() && ss == expected) {
+               //--- Allow read-only API access without a real session. We
+               //--- don't set CurrentUser, so admin-only checks fall back
+               //--- to 403 — exactly what we want for a render bot.
+               if(RequiresAdmin(req)) {
+                  Reply403(res);
+                  return httplib::Server::HandlerResponse::Handled;
+               }
+               return httplib::Server::HandlerResponse::Unhandled;
+            }
+         }
+
          const std::string token  = ExtractSessionCookie(cookie);
          auto pair = ctx->sessions ? ctx->sessions->ValidateAndExtend(token)
                                     : std::optional<std::pair<User,Session>>{};

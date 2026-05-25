@@ -110,6 +110,9 @@
     <ClInclude Include="api\FolderRoutes.h" />
     <ClInclude Include="api\CurrentUser.h" />
     <ClInclude Include="core\TelegramClient.h" />
+    <ClInclude Include="core\XlsxWriter.h" />
+    <ClInclude Include="core\PdfWriter.h" />
+    <ClInclude Include="core\ChromeRenderer.h" />
     <ClInclude Include="core\Scheduler.h" />
     <ClInclude Include="core\SessionManager.h" />
     <ClInclude Include="api\JobRunner.h" />
@@ -152,6 +155,9 @@
     <ClCompile Include="api\FolderRoutes.cpp" />
     <ClCompile Include="api\CurrentUser.cpp" />
     <ClCompile Include="core\TelegramClient.cpp" />
+    <ClCompile Include="core\XlsxWriter.cpp" />
+    <ClCompile Include="core\PdfWriter.cpp" />
+    <ClCompile Include="core\ChromeRenderer.cpp" />
     <ClCompile Include="core\Scheduler.cpp" />
     <ClCompile Include="core\SessionManager.cpp" />
     <ClCompile Include="api\JobRunner.cpp" />

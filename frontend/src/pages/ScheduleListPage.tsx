@@ -5,7 +5,7 @@ import { ReadyMadeAPI } from '../api/readyMade';
 import { TelegramSettingsCard } from '../components/TelegramSettingsCard';
 import { fmtDateTime } from '../utils/format';
 import { copyName } from '../lib/duplicate';
-import type { ScheduleEntry, ReadyMadeReport } from '../types';
+import type { ScheduleEntry, ReadyMadeReport, ScheduleDeliveryFormat } from '../types';
 import { FolderedCard, type FolderedCol } from '../components/FolderedCard';
 import { IconButton, IconSchedule, IconPlay, IconEdit, IconDuplicate, IconDelete } from '../components/icons';
 import { FoldersAPI } from '../api/folders';
@@ -162,9 +162,15 @@ export function ScheduleListPage() {
       searchValue: s => s.delivery_format,
       sortValue: s => s.delivery_format,
       render: s => (
-        <InlineSelect<'csv' | 'text'>
+        <InlineSelect<ScheduleDeliveryFormat>
           value={s.delivery_format}
-          options={[{ value: 'csv', label: 'CSV file' }, { value: 'text', label: 'Text summary' }]}
+          options={[
+            { value: 'csv',   label: 'CSV' },
+            { value: 'xlsx',  label: 'XLSX' },
+            { value: 'pdf',   label: 'PDF' },
+            { value: 'image', label: 'Screenshot' },
+            { value: 'text',  label: 'Text' },
+          ]}
           onSave={async (v) => {
             await SchedulesAPI.update(s.id, { delivery_format: v });
             reload();

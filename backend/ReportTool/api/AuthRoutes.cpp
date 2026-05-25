@@ -79,6 +79,29 @@ void AuthRoutes::Register(httplib::Server& srv, AppContext* ctx)
       res.set_content(json{ {"needs_setup", needs} }.dump(), "application/json");
    });
 
+   //--- GET /api/auth/screenshot-bootstrap?token=<X>&path=<P>
+   //--- Public endpoint that hands a headless render bot a short-lived
+   //--- read-only session cookie. Validates the query token against the
+   //--- server-side `screenshot_token` setting; on match, sets the
+   //--- "rt_screenshot" cookie (Max-Age=300, Path=/) and 302s to `path`.
+   //--- The pre-routing auth handler honors that cookie for read-only
+   //--- /api/* calls so the SPA at `path` can fetch its data normally.
+   srv.Get("/api/auth/screenshot-bootstrap", [ctx](const httplib::Request& req, httplib::Response& res){
+      const std::string tok      = req.has_param("token") ? req.get_param_value("token") : std::string();
+      const std::string redirect = req.has_param("path")  ? req.get_param_value("path")  : std::string("/");
+      const std::string expected = SettingsRepo::Get(*ctx->db, "screenshot_token");
+      if(expected.empty() || tok.empty() || tok != expected)
+      { SendError(res, 403, "invalid screenshot token"); return; }
+      //--- Path must be relative to keep the redirect on the same origin
+      //--- (defends against open-redirect even on a "validated" call).
+      if(redirect.empty() || redirect[0] != '/')
+      { SendError(res, 400, "redirect path must be absolute (start with /)"); return; }
+      res.set_header("Set-Cookie",
+         "rt_screenshot=" + expected + "; Path=/; Max-Age=300; SameSite=Lax; HttpOnly");
+      res.status = 302;
+      res.set_header("Location", redirect);
+   });
+
    //--- POST /api/auth/setup -- creates the first admin only when the users
    //--- table is empty. Race-safe: re-check count inside the same call.
    srv.Post("/api/auth/setup", [ctx](const httplib::Request& req, httplib::Response& res){
