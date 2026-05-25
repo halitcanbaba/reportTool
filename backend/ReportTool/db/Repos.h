@@ -86,6 +86,13 @@ namespace ScheduleRepo
                        int64_t next_run_at, int64_t last_job_id);
    bool UpdateDelivery(SqliteDb& db, int64_t id, const std::string& status,
                        const std::string& last_error);
+
+   //--- Atomic claim. Returns true iff the row was successfully transitioned
+   //--- from `from_status` to `to_status`. Used by the Telegram delivery
+   //--- sweep to prevent two ticks (when one is slow) from delivering the
+   //--- same schedule twice — the loser's UPDATE matches 0 rows and skips.
+   bool ClaimStatus(SqliteDb& db, int64_t id,
+                    const std::string& from_status, const std::string& to_status);
 }
 
 namespace SettingsRepo

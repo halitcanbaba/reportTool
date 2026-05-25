@@ -1245,6 +1245,10 @@ std::vector<ScheduleEntry> ScheduleRepo::ListDispatched(SqliteDb& db)
 {
    std::lock_guard<std::mutex> lock(db.Mutex());
    std::vector<ScheduleEntry> out;
+   //--- 'delivering' rows are reset to 'dispatched' by Scheduler::Loop on
+   //--- startup, so live ticks only ever need to scan 'dispatched' here.
+   //--- The atomic ClaimStatus check in TickOnce prevents two concurrent
+   //--- ticks (slow delivery overrunning 60s) from racing on the same row.
    SqliteStmt st(db, std::string("SELECT ") + kScheduleSelectCols +
                      " FROM schedules WHERE last_status='dispatched'");
    while(st.Step())
@@ -1281,6 +1285,22 @@ bool ScheduleRepo::UpdateDelivery(SqliteDb& db, int64_t id, const std::string& s
    st.BindI64 (3, id);
    st.Step();
    return true;
+}
+
+bool ScheduleRepo::ClaimStatus(SqliteDb& db, int64_t id,
+                                const std::string& from_status,
+                                const std::string& to_status)
+{
+   std::lock_guard<std::mutex> lock(db.Mutex());
+   SqliteStmt st(db,
+      "UPDATE schedules SET last_status=? WHERE id=? AND last_status=?");
+   st.BindText(1, to_status);
+   st.BindI64 (2, id);
+   st.BindText(3, from_status);
+   st.Step();
+   //--- Returns true only when exactly this transaction transitioned the
+   //--- row; another caller that raced us sees 0 rows changed and skips.
+   return sqlite3_changes(db.Handle()) > 0;
 }
 
 //+--------------------- SettingsRepo -----------------------------+

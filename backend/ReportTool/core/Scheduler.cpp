@@ -44,6 +44,16 @@ void Scheduler::Loop()
 {
    Logger::SetRequestId("scheduler");
    m_ctx->log->Info("Scheduler thread started.");
+
+   //--- Recover stale claims on startup. A row stuck in 'delivering' means
+   //--- a previous process crashed mid-Telegram-upload — reset to
+   //--- 'dispatched' so the first tick can retry. There's no live tick to
+   //--- race here (we haven't entered the loop yet).
+   try {
+      m_ctx->db->Exec("UPDATE schedules SET last_status='dispatched' "
+                      "WHERE last_status='delivering'", nullptr);
+   } catch(...) { /* non-fatal */ }
+
    while(!m_stop)
    {
       try { TickOnce(); }
@@ -62,7 +72,14 @@ namespace
    //--- we connect to uses UTC trading-day boundaries — see TimeUtil.cpp). The
    //--- offset constant is kept (== 0 now) so the helper structure below stays
    //--- intact and can be re-pointed if a future broker uses a different TZ.
-   constexpr int64_t kTzOffsetSec = 0;
+   //--- Schedule clock — UTC+3 (Istanbul / GMT+3, no DST). All time_hour /
+   //--- time_minute / day_of_week / day_of_month inputs are interpreted in
+   //--- this local frame; next_run_at is still persisted as a UTC unix
+   //--- timestamp so cross-tz consistency is preserved. NOTE: TimeUtil's
+   //--- own kTzOffsetSec stays at 0 — date_params (YYYY-MM-DD) and MT5
+   //--- daily snapshot boundaries remain UTC, which matches what the
+   //--- engine actually reads from the broker.
+   constexpr int64_t kTzOffsetSec = 3 * 3600;
 
    //--- Internal: gmtime/_mkgmtime helpers operate on UTC. To work in "local
    //--- wall clock" (GMT+3) we shift by +offset before reading, and -offset
@@ -115,6 +132,18 @@ namespace
    int DowLocal(int64_t unix_secs)
    {
       return DowUtc(unix_secs + kTzOffsetSec);
+   }
+
+   //--- Last calendar day of (year, month_1). Handles Feb leap-year via the
+   //--- standard rule (divisible by 4, not 100, unless 400). Lets monthly
+   //--- schedules with day_of_month=31 actually fire on Apr 30, Feb 28/29.
+   int LastDayOfMonth(int year, int month_1)
+   {
+      static const int days[] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+      if(month_1 < 1 || month_1 > 12) return 28;
+      int d = days[month_1 - 1];
+      if(month_1 == 2 && ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0)) d = 29;
+      return d;
    }
 
    //--- Y/M/D of the GMT+3 day reached by adding delta calendar days to now.
@@ -289,23 +318,41 @@ int64_t Scheduler::ComputeNext(const ScheduleEntry& s, int64_t now)
    }
    if(s.frequency == "weekly")
    {
-      const int target_dow = s.day_of_week % 7;
+      //--- Prefer the days_of_week[] array (multi-day weekly support) and
+      //--- fall back to the legacy single day_of_week when it's empty so
+      //--- schedules saved before this change keep their behaviour.
+      std::vector<int> targets;
+      if(!s.days_of_week.empty())
+      {
+         for(int x : s.days_of_week) targets.push_back(((x % 7) + 7) % 7);
+      }
+      else
+      {
+         targets.push_back(((s.day_of_week % 7) + 7) % 7);
+      }
       for(int add = 0; add < 14; ++add)
       {
          int y2,mo2,d2; AddDaysLocal(now, add, &y2, &mo2, &d2);
          const int64_t cand = MakeUtcFromLocal(y2, mo2, d2, s.time_hour, s.time_minute);
-         if(DowLocal(cand) != target_dow) continue;
+         const int cand_dow = DowLocal(cand);
+         bool ok = false;
+         for(int t : targets) if(t == cand_dow) { ok = true; break; }
+         if(!ok) continue;
          if(cand > now) return cand;
       }
       return now + 7 * 86400;
    }
    if(s.frequency == "monthly")
    {
-      int dom = std::max(1, std::min(28, s.day_of_month));
+      const int requested = std::max(1, s.day_of_month);
       for(int month_offset = 0; month_offset < 3; ++month_offset)
       {
          int ty = y, tm = mo + month_offset;
          while(tm > 12) { tm -= 12; ty++; }
+         //--- Clamp to the actual length of the candidate month so e.g.
+         //--- day_of_month=31 falls to Apr 30 / Feb 28-29 instead of the
+         //--- previous hard 28-day cap that silently truncated user intent.
+         const int dom = std::min(requested, LastDayOfMonth(ty, tm));
          const int64_t cand = MakeUtcFromLocal(ty, tm, dom, s.time_hour, s.time_minute);
          if(cand > now) return cand;
       }
@@ -628,6 +675,15 @@ void Scheduler::TickOnce()
       if(!job) { ScheduleRepo::UpdateDelivery(*m_ctx->db, sch.id, "failed", "job missing"); continue; }
       if(job->status == JobStatus::Queued || job->status == JobStatus::Running) continue;
 
+      //--- Atomic claim: flip "dispatched" -> "delivering" so a slow
+      //--- delivery (large xlsx, slow Telegram upload) can't be picked up
+      //--- a second time by the next tick if it overruns 60s. Loser sees
+      //--- 0 rows changed and skips silently — winner owns the delivery.
+      if(!ScheduleRepo::ClaimStatus(*m_ctx->db, sch.id, "dispatched", "delivering"))
+      {
+         continue;
+      }
+
       if(job->status == JobStatus::Failed)
       {
          ScheduleRepo::UpdateDelivery(*m_ctx->db, sch.id, "failed",
@@ -652,7 +708,20 @@ void Scheduler::TickOnce()
          continue;
       }
 
-      const std::string caption = sch.name + " — job #" + std::to_string(job->id);
+      //--- Catch-up tag: if the dispatch flagged this run as late (server
+      //--- was down past 24h), prepend "[catchup +Nh]" so the recipient
+      //--- knows the data isn't a fresh on-time run.
+      int64_t catchup_hours = 0;
+      if(!job->params_json.empty()) {
+         auto pj = nlohmann::json::parse(job->params_json, nullptr, false);
+         if(!pj.is_discarded() && pj.contains("_catchup_hours_late")
+                                && pj["_catchup_hours_late"].is_number_integer()) {
+            catchup_hours = pj["_catchup_hours_late"].get<int64_t>();
+         }
+      }
+      std::string caption = sch.name + " — job #" + std::to_string(job->id);
+      if(catchup_hours > 0)
+         caption = "[catchup +" + std::to_string(catchup_hours) + "h] " + caption;
       const std::string fmt = sch.delivery_format.empty() ? std::string("csv")
                                                           : sch.delivery_format;
 
@@ -791,14 +860,20 @@ void Scheduler::TickOnce()
          ScheduleRepo::UpdateDelivery(*m_ctx->db, sch.id, "failed", "ready-made missing");
          continue;
       }
-      if(now - sch.next_run_at > 24 * 3600 && sch.next_run_at > 0)
+      //--- Catch-up: when a schedule is significantly late (server down,
+      //--- power outage, …) we still fire one run so the user notices the
+      //--- gap and gets the most recent data. The dispatched job carries a
+      //--- "[catchup N h late]" tag in its params so the delivery caption
+      //--- can surface that a backfill is happening rather than silently
+      //--- skipping. Previously we just advanced next_run_at and dropped
+      //--- the firing — a silent data-loss footgun across restarts.
+      const bool is_catchup = sch.next_run_at > 0
+                              && (now - sch.next_run_at) > 24 * 3600;
+      if(is_catchup)
       {
-         //--- More than a day late — recompute without firing.
-         const int64_t nxt = ComputeNext(sch, now);
-         ScheduleRepo::UpdateDispatch(*m_ctx->db, sch.id, sch.last_run_at, nxt, sch.last_job_id);
-         m_ctx->log->Warn("Schedule %lld: stale (>24h late), skipping firing, next=%lld",
-                          (long long)sch.id, (long long)nxt);
-         continue;
+         m_ctx->log->Warn("Schedule %lld: %lldh late, firing catch-up run",
+                          (long long)sch.id,
+                          (long long)((now - sch.next_run_at) / 3600));
       }
 
       auto tpl = TemplateRepo::Get(*m_ctx->db, rm->template_id);
@@ -831,17 +906,36 @@ void Scheduler::TickOnce()
          continue;
       }
       params["manager_id"] = manager_id;
+      //--- Embed lateness so the delivery handler can prefix the Telegram
+      //--- caption with [catchup +Nh]. Surfaces server-downtime gaps to
+      //--- the recipient instead of letting them assume the report is
+      //--- fresh.
+      if(is_catchup) params["_catchup_hours_late"] = (now - sch.next_run_at) / 3600;
 
       JobRow row;
       row.template_id       = rm->template_id;
       row.manager_id        = manager_id;
       row.account_filter_id = rm->account_filter_id;
       row.params_json       = params.dump();
-      JobRepo::Create(*m_ctx->db, row);
-      m_ctx->jobs->Enqueue(row.id);
-
+      //--- Single SQLite transaction so Create + dispatch state move
+      //--- atomically. Without this, a crash between the two leaves a
+      //--- schedule with next_run_at still in the past + last_status='',
+      //--- which would re-dispatch on restart (duplicate Telegram send).
       const int64_t nxt = ComputeNext(sch, now);
-      ScheduleRepo::UpdateDispatch(*m_ctx->db, sch.id, now, nxt, row.id);
+      try {
+         m_ctx->db->Exec("BEGIN", nullptr);
+         JobRepo::Create(*m_ctx->db, row);
+         ScheduleRepo::UpdateDispatch(*m_ctx->db, sch.id, now, nxt, row.id);
+         m_ctx->db->Exec("COMMIT", nullptr);
+      }
+      catch(...) {
+         m_ctx->db->Exec("ROLLBACK", nullptr);
+         m_ctx->log->Error("Schedule %lld: dispatch tx failed", (long long)sch.id);
+         continue;
+      }
+      //--- Enqueue runs outside the tx — JobRunner picks up queued rows
+      //--- from the table directly so this is just a wakeup hint.
+      m_ctx->jobs->Enqueue(row.id);
       m_ctx->log->Info("Schedule %lld dispatched job %lld; next=%lld",
                        (long long)sch.id, (long long)row.id, (long long)nxt);
    }
