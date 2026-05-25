@@ -39,19 +39,24 @@ function makeFieldChip(f: FieldDef, dateParams: string[]): Chip {
 }
 
 export function FormulaBar({ chips, onChipsChange, catalog, dateParams, path, refCandidates }: Props) {
-  //--- Union of every bucket key across all saved DepositFilters — fuels the
-  //--- <datalist> autocomplete on deposit-bucket field chips. Empty until
-  //--- the user has saved at least one filter; chips still accept free text.
-  const [bucketKeys, setBucketKeys] = useState<string[]>([]);
+  //--- Key → label map across every saved DepositFilter. Two purposes:
+  //--- (1) fuels the <datalist> autocomplete on deposit-bucket chips and
+  //--- (2) lets the chip view surface the bucket's friendly label
+  //--- ("Cash Deposit") instead of the generic field name
+  //--- ("sum_deposit_amount") so the formula reads naturally.
+  const [bucketLabels, setBucketLabels] = useState<Map<string, string>>(new Map());
   useEffect(() => {
     DepositFiltersAPI.list()
       .then(fs => {
-        const seen = new Set<string>();
-        for (const f of fs) for (const b of f.buckets) seen.add(b.key);
-        setBucketKeys(Array.from(seen).sort());
+        const m = new Map<string, string>();
+        for (const f of fs) for (const b of f.buckets) {
+          if (!m.has(b.key)) m.set(b.key, b.label || b.key);
+        }
+        setBucketLabels(m);
       })
       .catch(() => {});
   }, []);
+  const bucketKeys = Array.from(bucketLabels.keys()).sort();
 
   const insertAt = (idx: number, chip: Chip) => {
     const next = chips.slice();
@@ -94,6 +99,7 @@ export function FormulaBar({ chips, onChipsChange, catalog, dateParams, path, re
         <span key={c.id} className="flex items-center">
           <ChipView chip={c} catalog={catalog} dateParams={dateParams}
                     refCandidates={refCandidates}
+                    bucketLabels={bucketLabels}
                     onChange={(next) => replaceAt(i, next)}
                     onReplaceMany={(items) => replaceManyAt(i, items)}
                     onDelete={() => deleteAt(i)} />
@@ -153,11 +159,12 @@ function InsertionSlot({ index, path, catalog, dateParams, refCandidates, onInse
 
 //--- Chip render -----------------------------------------------------
 
-function ChipView({ chip, catalog, dateParams, refCandidates, onChange, onReplaceMany, onDelete }: {
+function ChipView({ chip, catalog, dateParams, refCandidates, bucketLabels, onChange, onReplaceMany, onDelete }: {
   chip: Chip;
   catalog: FieldCatalog;
   dateParams: string[];
   refCandidates: Column[];
+  bucketLabels: Map<string, string>;
   onChange: (next: Chip) => void;
   onReplaceMany: (items: Chip[]) => void;
   onDelete: () => void;
@@ -229,17 +236,19 @@ function ChipView({ chip, catalog, dateParams, refCandidates, onChange, onReplac
   const f = catalog.fields.find(x => x.name === chip.name);
   return (
     <FieldChipView chip={chip} field={f} catalog={catalog} dateParams={dateParams}
+                   bucketLabels={bucketLabels}
                    onChange={onChange} onDelete={onDelete} />
   );
 }
 
-function FieldChipView({ chip, field, catalog, dateParams, onChange, onDelete }: {
-  chip:       Extract<Chip, { kind: 'field' }>;
-  field?:     FieldDef;
-  catalog:    FieldCatalog;
-  dateParams: string[];
-  onChange:   (next: Chip) => void;
-  onDelete:   () => void;
+function FieldChipView({ chip, field, catalog, dateParams, bucketLabels, onChange, onDelete }: {
+  chip:         Extract<Chip, { kind: 'field' }>;
+  field?:       FieldDef;
+  catalog:      FieldCatalog;
+  dateParams:   string[];
+  bucketLabels: Map<string, string>;
+  onChange:     (next: Chip) => void;
+  onDelete:     () => void;
 }) {
   const [filterOpen, setFilterOpen] = useState(false);
   const cmpCount = countCmps(chip.predicate);
@@ -252,6 +261,17 @@ function FieldChipView({ chip, field, catalog, dateParams, onChange, onDelete }:
   //--- alongside their date args. Use a datalist for autocomplete from any
   //--- DepositFilter the user has saved.
   const isDepositBucketField = field?.category === 'K';
+
+  //--- For deposit-bucket chips: surface the bucket's label as the primary
+  //--- chip text ("Cash Deposit") instead of the generic backend field name
+  //--- ("sum_deposit_amount"), with a small prefix that marks the agg type.
+  const aggPrefix =
+    chip.name === 'sum_deposit_amount' ? 'Σ' :
+    chip.name === 'sum_deposit_abs'    ? 'Σ|…|' :
+    chip.name === 'count_deposits'     ? '#' : '';
+  const bucketDisplay = chip.bucket
+    ? (bucketLabels.get(chip.bucket) || chip.bucket)
+    : null;
 
   const setPredicate = (p: Predicate | null) => {
     const next = { ...chip };
@@ -269,7 +289,14 @@ function FieldChipView({ chip, field, catalog, dateParams, onChange, onDelete }:
 
   return (
     <span className="inline-flex items-center px-2 py-1 rounded border border-emerald-300 bg-emerald-50 relative">
-      <code className="font-mono text-xs text-emerald-900">{chip.name}</code>
+      {isDepositBucketField && bucketDisplay ? (
+        <span className="flex items-center gap-1" title={chip.bucket}>
+          <span className="font-mono text-xs text-purple-700">{aggPrefix}</span>
+          <span className="font-medium text-xs text-emerald-900">{bucketDisplay}</span>
+        </span>
+      ) : (
+        <code className="font-mono text-xs text-emerald-900">{chip.name}</code>
+      )}
       {chip.args.length > 0 && (
         <span className="text-xs text-emerald-700 ml-1 flex items-center gap-0.5">
           (

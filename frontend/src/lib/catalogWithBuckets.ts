@@ -11,7 +11,7 @@ const BUCKET_FIELD_NAMES = ['sum_deposit_amount', 'sum_deposit_abs', 'count_depo
 
 const AGG_PREFIX: Record<string, string> = {
   sum_deposit_amount: 'Σ',
-  sum_deposit_abs:    'Σ |…|',
+  sum_deposit_abs:    'Σ|…|',
   count_deposits:     '#',
 };
 
@@ -51,7 +51,8 @@ export async function loadCatalogWithBuckets(): Promise<FieldCatalog> {
       if (!base) continue;
       fields.push({
         ...base,
-        label: `${AGG_PREFIX[name] ?? name}  ${label}  (${key})`,
+        label: `${AGG_PREFIX[name] ?? name} ${label}`,
+        description: `${base.label} · bucket: ${key}`,
         default_bucket: key,
       });
     }

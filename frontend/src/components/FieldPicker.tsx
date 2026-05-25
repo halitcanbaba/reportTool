@@ -22,6 +22,9 @@ function DraggableField({ f, onPick }: { f: FieldDef; onPick: (f: FieldDef) => v
     id: dndId,
     data: { kind: 'field', field: f },
   });
+  //--- Per-bucket virtual entries lead with the bucket's friendly label;
+  //--- the generic backend field name (sum_deposit_amount etc.) is hidden
+  //--- to keep the list scannable when many buckets exist.
   return (
     <button type="button"
             ref={setNodeRef}
@@ -33,8 +36,14 @@ function DraggableField({ f, onPick }: { f: FieldDef; onPick: (f: FieldDef) => v
               (isDragging ? 'opacity-40' : '')
             }>
       <span className="text-sm">
-        <code className="font-mono text-xs text-ink-700">{f.name}</code>
-        <span className="ml-2 text-ink-500 text-xs">{f.label}</span>
+        {f.default_bucket ? (
+          <span className="text-ink-800">{f.label}</span>
+        ) : (
+          <>
+            <code className="font-mono text-xs text-ink-700">{f.name}</code>
+            <span className="ml-2 text-ink-500 text-xs">{f.label}</span>
+          </>
+        )}
       </span>
       <span className="text-xs text-ink-400 font-mono">
         {f.arity === 0 ? '· now' : f.arity === 1 ? '(date)' : '(F,T)'}
