@@ -167,17 +167,36 @@ export function ScheduleListPage() {
 
     //--- Don't reload right away — wait for the dwell window so the
     //--- 'queued' chip stays visible. Polls then track dispatched →
-    //--- delivering → completed transitions.
+    //--- delivering → completed transitions. The scheduler tick is ≤60s
+    //--- so dispatch lands within 60s and delivery within ~60s more;
+    //--- a 5min poll window covers the slowest realistic round-trip
+    //--- (image format + slow Telegram upload). Stop early once the
+    //--- schedule reaches a terminal state so we don't burn cycles.
+    const POLL_WINDOW_MS = 5 * 60_000;
     const tick = async () => {
       const elapsed = Date.now() - startedAt;
-      if (elapsed > 2.5 * 60_000) {
-        //--- Safety release: long-running job that never completed in our
-        //--- window. Stop pretending so the row reflects whatever backend
-        //--- has now (likely still dispatched).
+      if (elapsed > POLL_WINDOW_MS) {
         pendingRunRef.current.delete(s.id);
         return;
       }
       await reload(true);
+      //--- Peek at the latest items via the setter callback; if the row
+      //--- has reached a fresh-run terminal state ('completed'/'failed'
+      //--- with last_run_at past the click), we're done.
+      let reachedTerminal = false;
+      setItems(curr => {
+        const row = curr.find(x => x.id === s.id);
+        if (row) {
+          const fresh = row.last_run_at * 1000 >= startedAt - 2000;
+          const term  = row.last_status === 'completed' || row.last_status === 'failed';
+          if (fresh && term) reachedTerminal = true;
+        }
+        return curr;
+      });
+      if (reachedTerminal) {
+        pendingRunRef.current.delete(s.id);
+        return;
+      }
       //--- 2s polls in the first 30s catch the scheduler-tick handoff;
       //--- then back off to 5s for the rest of the window.
       setTimeout(tick, elapsed < 30_000 ? 2000 : 5000);

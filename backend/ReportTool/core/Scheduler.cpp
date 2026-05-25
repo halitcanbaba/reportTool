@@ -728,7 +728,13 @@ void Scheduler::TickOnce()
       const std::string fmt = sch.delivery_format.empty() ? std::string("csv")
                                                           : sch.delivery_format;
 
+      //--- Wrap the entire delivery dispatch in try/catch so any C++
+      //--- exception (out_of_memory while building xlsx, JSON parse trap,
+      //--- httplib socket throw, …) still results in a 'failed' status —
+      //--- otherwise the row stays stuck in 'delivering' forever and the
+      //--- UI's terminal-state poll never resolves.
       TelegramClient::Result r;
+      try {
       if(fmt == "text")
       {
          //--- Telegram HTML mode: schedule name bolded; KPI block in <pre>
@@ -891,10 +897,14 @@ void Scheduler::TickOnce()
          //--- Built in-memory from the persisted CSV using XlsxWriter.
          //--- Telegram caps documents at 50 MB; our store-mode zip can
          //--- inflate a few-MB CSV to a few-MB xlsx — comfortably under.
+         //--- Build failure → 'failed' with an explicit error message so
+         //--- the user sees a red chip + reason in the UI, not a chipper
+         //--- "completed" that masks the actual problem.
          const std::string blob = BuildXlsxFromJob(*m_ctx->db, *job, sch.name);
          if(blob.empty())
          {
-            r = TelegramClient::SendMessage(token, chat, caption + " (xlsx build failed)");
+            r.ok = false; r.http_status = 0;
+            r.error = "xlsx build failed (csv missing or template gone)";
          }
          else
          {
@@ -908,7 +918,8 @@ void Scheduler::TickOnce()
          const std::string blob = BuildPdfFromJob(*m_ctx->db, *job, sch.name);
          if(blob.empty())
          {
-            r = TelegramClient::SendMessage(token, chat, caption + " (pdf build failed)");
+            r.ok = false; r.http_status = 0;
+            r.error = "pdf build failed (csv missing or template gone)";
          }
          else
          {
@@ -918,14 +929,16 @@ void Scheduler::TickOnce()
       }
       else if(fmt == "image")
       {
-         //--- Headless Chrome renders the actual result-page SPA, so the
-         //--- screenshot matches what the user sees in their browser.
-         //--- Falls back to a text notice when Chrome isn't installed or
-         //--- the render times out — Telegram still gets a heads-up.
+         //--- Headless Chrome renders the actual result-page SPA. If the
+         //--- browser isn't installed, the render token / url base is
+         //--- wrong, or the page times out, mark the delivery 'failed' so
+         //--- the user knows the screenshot is missing — silently sending
+         //--- a fallback text disguised the failure as "completed".
          const std::string png = BuildScreenshotForJob(*m_ctx->db, *job);
          if(png.empty())
          {
-            r = TelegramClient::SendMessage(token, chat, caption + " (screenshot unavailable)");
+            r.ok = false; r.http_status = 0;
+            r.error = "screenshot unavailable (Chrome/Edge missing, render token unset, or URL base wrong — check /api/settings/screenshot)";
          }
          else
          {
@@ -944,6 +957,13 @@ void Scheduler::TickOnce()
          const std::string csv_path = job->output_dir + "/" + job->csv_filename;
          r = TelegramClient::SendDocument(token, chat, csv_path,
                                            job->csv_filename, caption);
+      }
+      } catch(const std::exception& ex) {
+         r.ok = false; r.http_status = 0;
+         r.error = std::string("delivery exception: ") + ex.what();
+      } catch(...) {
+         r.ok = false; r.http_status = 0;
+         r.error = "delivery exception (unknown)";
       }
       ScheduleRepo::UpdateDelivery(*m_ctx->db, sch.id, r.ok ? "completed" : "failed", r.error);
       m_ctx->log->Info("Schedule %lld delivery [%s]: %s (chat=%s)",
