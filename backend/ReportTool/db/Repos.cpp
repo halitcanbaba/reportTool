@@ -1229,9 +1229,11 @@ std::vector<ScheduleEntry> ScheduleRepo::ListDue(SqliteDb& db, int64_t now)
 {
    std::lock_guard<std::mutex> lock(db.Mutex());
    std::vector<ScheduleEntry> out;
+   //--- 'queued' is set by /run-now so the UI sees an instant status
+   //--- change; we still want the scheduler tick to pick it up here.
    SqliteStmt st(db, std::string("SELECT ") + kScheduleSelectCols +
                      " FROM schedules WHERE enabled=1 AND next_run_at <= ? "
-                     "AND (last_status='' OR last_status='completed' OR last_status='failed')");
+                     "AND last_status IN ('','completed','failed','queued')");
    st.BindI64(1, now);
    while(st.Step())
    {

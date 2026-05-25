@@ -154,13 +154,18 @@ void ScheduleRoutes::Register(httplib::Server& srv, AppContext* ctx)
 
    //--- Force the next firing to be "now" so the scheduler dispatches on its
    //--- next tick (≤60s). Useful for manual testing of scheduled delivery.
+   //--- Sets last_status='queued' immediately so the UI has something to
+   //--- show while waiting for the tick — previously last_status was
+   //--- cleared and the table looked unchanged until the tick fired
+   //--- ~60s later.
    srv.Post(R"(/api/schedules/(\d+)/run-now)", [ctx](const httplib::Request& req, httplib::Response& res){
       const int64_t id = std::stoll(req.matches[1]);
       auto cur = ScheduleRepo::Get(*ctx->db, id);
       if(!cur) { SendError(res, 404, "schedule not found"); return; }
       ScheduleEntry s = *cur;
       s.next_run_at = (int64_t)time(nullptr);
-      s.last_status = "";   // clear any previous dispatched state to allow re-fire
+      s.last_status = "queued";   // visible cue; ListDue still picks it up
+      s.last_error  = "";
       ScheduleRepo::Update(*ctx->db, s);
       res.set_content(json{{"queued_for", s.next_run_at}}.dump(), "application/json");
    });

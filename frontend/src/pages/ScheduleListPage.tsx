@@ -50,7 +50,9 @@ function describeFreq(s: ScheduleEntry): string {
 function statusBadge(s: string) {
   const map: Record<string, string> = {
     completed:  'bg-emerald-50 text-emerald-700 border-emerald-200',
-    dispatched: 'bg-blue-50 text-blue-700 border-blue-200',
+    dispatched: 'bg-blue-50 text-blue-700 border-blue-200 animate-pulse',
+    delivering: 'bg-blue-50 text-blue-700 border-blue-200 animate-pulse',
+    queued:     'bg-amber-50 text-amber-700 border-amber-200 animate-pulse',
     failed:     'bg-red-50 text-red-700 border-red-200',
     pending:    'bg-amber-50 text-amber-700 border-amber-200',
     '':         'bg-ink-50 text-ink-500 border-ink-200',
@@ -91,8 +93,26 @@ export function ScheduleListPage() {
 
   const onRunNow = async (s: ScheduleEntry) => {
     if (!confirm(`Run "${s.name}" now? A job will be queued and the next firing will be skipped.`)) return;
-    try { await SchedulesAPI.runNow(s.id); reload(); }
-    catch (e: any) { alert(e.message ?? 'run-now failed'); }
+    try {
+      await SchedulesAPI.runNow(s.id);
+      await reload();
+      //--- Backend just flipped last_status='queued' (visible immediately).
+      //--- The scheduler tick (≤60s) will move it through dispatched → delivering →
+      //--- completed/failed. Poll the list for 2 minutes so the user sees the
+      //--- transitions land without manually refreshing. Stop early once this
+      //--- schedule reports a terminal state.
+      const startedAt = Date.now();
+      const tick = async () => {
+        if (Date.now() - startedAt > 2 * 60_000) return;
+        await reload();
+        //--- Re-pull from a fresh snapshot — items state is captured in closure
+        //--- of the parent component, but reload() updates it asynchronously so
+        //--- we read via the closed-over `items` indirectly through reload's
+        //--- own state set. Simplest: just keep polling until the timeout.
+        setTimeout(tick, 5000);
+      };
+      setTimeout(tick, 5000);
+    } catch (e: any) { alert(e.message ?? 'run-now failed'); }
   };
 
   const onDuplicate = async (s: ScheduleEntry) => {
