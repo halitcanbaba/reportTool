@@ -54,30 +54,53 @@ namespace
       return s + std::string(w - s.size(), ' ');
    }
 
-   //--- PDF "object" accumulator. Each Add() records the byte offset so the
-   //--- xref table at the end can point to it. Returns the object number
-   //--- (1-based) for use in cross-references like "5 0 R".
+   //--- PDF "object" accumulator. Reserve() returns an object id without
+   //--- writing anything; Fill() commits the contents at the recorded
+   //--- offset. This separation lets forward references (a page dict
+   //--- naming its Pages parent before the parent itself exists) resolve
+   //--- WITHOUT post-write string substitution — substitution would shift
+   //--- bytes after the fact and corrupt every xref offset that follows.
    struct PdfBuilder {
       std::string body;
-      std::vector<size_t> offsets;  // index i = offset of object (i+1)
+      std::vector<size_t> offsets;     // index i = byte offset of object (i+1) in body
+      std::vector<bool>   committed;   // matches offsets[]; false when slot is just reserved
 
-      int Add(const std::string& obj)
+      int Reserve()
       {
-         offsets.push_back(body.size());
-         char hdr[32]; std::snprintf(hdr, sizeof(hdr), "%zu 0 obj\n", offsets.size());
-         body += hdr;
-         body += obj;
-         body += "\nendobj\n";
+         offsets.push_back(0);
+         committed.push_back(false);
          return (int)offsets.size();
       }
 
-      //--- Build a content-stream object: wraps the stream in dict + length.
+      void Fill(int id, const std::string& obj)
+      {
+         const size_t idx = (size_t)id - 1;
+         offsets[idx] = body.size();
+         committed[idx] = true;
+         char hdr[32]; std::snprintf(hdr, sizeof(hdr), "%d 0 obj\n", id);
+         body += hdr;
+         body += obj;
+         body += "\nendobj\n";
+      }
+
+      int Add(const std::string& obj)
+      {
+         const int id = Reserve();
+         Fill(id, obj);
+         return id;
+      }
+
+      //--- Build a content-stream object. /Length is the EXACT byte count
+      //--- between the LF that closes "stream\n" and the byte right before
+      //--- "endstream" — i.e. content.size() with no extra trailing
+      //--- newline. Off-by-one here is the difference between Acrobat
+      //--- opening the file and refusing it as malformed.
       int AddStream(const std::string& content)
       {
          char head[64]; std::snprintf(head, sizeof(head), "<< /Length %zu >>\nstream\n", content.size());
          std::string obj = head;
          obj += content;
-         obj += "\nendstream";
+         obj += "endstream";
          return Add(obj);
       }
 
@@ -130,14 +153,12 @@ std::string PdfWriter::Build(const std::string& title,
 {
    PdfBuilder b;
 
-   //--- Reserve slot 1 for Catalog and slot 2 for Pages parent (forward
-   //--- references via "N 0 R" let us list page kids after we build them).
-   //--- We'll fill those at the end with deferred Add() calls in the
-   //--- correct numeric slot using a different technique: pre-compute
-   //--- IDs based on page count.
-
-   //--- Two shared font objects so each page can reference /F1 /F2.
-   const int helv_b_id = b.Add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>");
+   //--- Reserve the Pages parent object id BEFORE we write any page dicts.
+   //--- Each page dict's /Parent ref then bakes in the real id directly
+   //--- instead of a placeholder that would need post-write substitution
+   //--- (which shifts byte offsets and breaks the xref table).
+   const int pages_id   = b.Reserve();
+   const int helv_b_id  = b.Add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>");
    const int courier_id = b.Add("<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>");
 
    //--- Available chars per row given the monospace width.
@@ -193,22 +214,18 @@ std::string PdfWriter::Build(const std::string& title,
 
       const int contents_id = b.AddStream(s.str());
 
-      //--- Page dict — references the Pages parent by ID we don't know yet.
-      //--- Plug in the offset later? Easier: defer Pages object to last,
-      //--- after we know all page IDs. Then each page references parent by
-      //--- the same final ID. So here, leave parent ref as a placeholder
-      //--- token we patch when the Pages object is allocated.
+      //--- Page dict with the pre-reserved pages_id baked in directly.
       char dict[512];
       std::snprintf(dict, sizeof(dict),
-         "<< /Type /Page /Parent %%PAGES_ID%% /MediaBox [0 0 %d %d] "
+         "<< /Type /Page /Parent %d 0 R /MediaBox [0 0 %d %d] "
          "/Resources << /Font << /F1 %d 0 R /F2 %d 0 R >> >> "
          "/Contents %d 0 R >>",
-         (int)kPageW, (int)kPageH, helv_b_id, courier_id, contents_id);
+         pages_id, (int)kPageW, (int)kPageH, helv_b_id, courier_id, contents_id);
       const int page_id = b.Add(dict);
       page_ids.push_back(page_id);
    }
 
-   //--- Pages parent (now we know all page IDs).
+   //--- Fill the reserved Pages parent now that all kids are known.
    std::ostringstream kids;
    for(size_t i = 0; i < page_ids.size(); ++i)
    {
@@ -219,21 +236,9 @@ std::string PdfWriter::Build(const std::string& title,
    std::snprintf(pages_dict, sizeof(pages_dict),
       "<< /Type /Pages /Kids [%s] /Count %zu >>",
       kids.str().c_str(), page_ids.size());
-   const int pages_id = b.Add(pages_dict);
+   b.Fill(pages_id, pages_dict);
 
-   //--- Patch every "%PAGES_ID%" placeholder in the body with the real id.
-   {
-      char repl[16]; std::snprintf(repl, sizeof(repl), "%d 0 R", pages_id);
-      const std::string needle = "%PAGES_ID%";
-      size_t at = 0;
-      while((at = b.body.find(needle, at)) != std::string::npos)
-      {
-         b.body.replace(at, needle.size(), repl);
-         at += std::strlen(repl);
-      }
-   }
-
-   //--- Catalog object.
+   //--- Catalog object — last so its xref offset is the highest.
    char cat[64];
    std::snprintf(cat, sizeof(cat), "<< /Type /Catalog /Pages %d 0 R >>", pages_id);
    const int catalog_id = b.Add(cat);
