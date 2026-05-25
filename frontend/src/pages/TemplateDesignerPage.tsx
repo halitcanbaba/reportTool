@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors,
          type DragEndEvent, type DragStartEvent } from '@dnd-kit/core';
 import { TemplatesAPI } from '../api/templates';
-import { FieldsAPI } from '../api/fields';
+import { loadCatalogWithBuckets } from '../lib/catalogWithBuckets';
 import type {
   Column, ColumnFormat, ColumnKind, ExprNode, FieldCatalog, FieldDef, Predicate,
   SortSpec, Template, TemplateInput, ValidationError,
@@ -54,7 +54,7 @@ function uniqueKey(prefix: string, cols: Column[]) {
 }
 
 function chipFromField(f: FieldDef, dateParams: string[]): Chip {
-  return {
+  const chip: Chip = {
     id: newChipId(),
     kind: 'field',
     name: f.name,
@@ -63,6 +63,11 @@ function chipFromField(f: FieldDef, dateParams: string[]): Chip {
       f.arity === 2 ? [dateParams[0] ?? '', dateParams[1] ?? dateParams[0] ?? ''] :
                       [],
   };
+  //--- Per-bucket virtual entries (catalogWithBuckets) carry their bucket
+  //--- key on FieldDef.default_bucket — pre-fill the chip so dropping a
+  //--- "Σ cash_deposit" field produces a ready-to-go chip.
+  if (f.default_bucket) chip.bucket = f.default_bucket;
+  return chip;
 }
 
 export function TemplateDesignerPage() {
@@ -86,7 +91,10 @@ export function TemplateDesignerPage() {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
   useEffect(() => {
-    FieldsAPI.catalog().then(setCatalog).catch(e => setErr(e.message ?? 'failed to load fields'));
+    //--- Catalog + DepositFilter buckets merged in a single shot so K-category
+    //--- entries surface per bucket key (Σ cash_deposit, # promotion, etc.)
+    //--- instead of the three generic stubs that need manual bucket typing.
+    loadCatalogWithBuckets().then(setCatalog).catch(e => setErr(e.message ?? 'failed to load fields'));
   }, []);
 
   useEffect(() => {

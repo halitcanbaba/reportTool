@@ -158,13 +158,19 @@ export type FieldReturn = 'money' | 'int' | 'pct' | 'text' | 'date';
 export type FieldDef = {
   name:               string;
   label:              string;
-  category:           string;          // display group (A..I)
+  category:           string;          // display group (A..K)
   source:             FieldSource;
   arity:              FieldArity;
   return_type:        FieldReturn;
   is_identifier:      boolean;
   supports_predicate: boolean;
   description?:       string;
+  //--- Synthetic-only: when set, indicates this FieldDef is a per-bucket
+  //--- virtual entry expanded from a saved DepositFilter. makeFieldChip
+  //--- copies this onto ExprField.bucket so the chip is ready to drop with
+  //--- the bucket pre-selected. Never present on real backend-registered
+  //--- fields.
+  default_bucket?:    string;
 };
 
 export type FilterValueType = 'num' | 'text' | 'enum';

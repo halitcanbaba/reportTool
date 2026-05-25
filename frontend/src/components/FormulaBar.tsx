@@ -22,7 +22,7 @@ const numericOnly = (f: { return_type: string }) =>
   f.return_type === 'int'   || f.return_type === 'date';
 
 function makeFieldChip(f: FieldDef, dateParams: string[]): Chip {
-  return {
+  const chip: Chip = {
     id: newChipId(),
     kind: 'field',
     name: f.name,
@@ -31,6 +31,11 @@ function makeFieldChip(f: FieldDef, dateParams: string[]): Chip {
       f.arity === 2 ? [dateParams[0] ?? '', dateParams[1] ?? dateParams[0] ?? ''] :
                       [],
   };
+  //--- Per-bucket virtual entries from catalogWithBuckets carry their bucket
+  //--- key on FieldDef.default_bucket — pre-fill the chip so dragging a
+  //--- "Σ cash_deposit" picker entry produces a ready-to-go field chip.
+  if (f.default_bucket) chip.bucket = f.default_bucket;
+  return chip;
 }
 
 export function FormulaBar({ chips, onChipsChange, catalog, dateParams, path, refCandidates }: Props) {

@@ -1918,6 +1918,7 @@ json FieldCatalog::CatalogToJson()
       {"G", "Open Positions"},
       {"H", "Open Orders"},
       {"I", "Order History"},
+      {"K", "Deposit Filter (preset)"},
    };
 
    json cats = json::array();
