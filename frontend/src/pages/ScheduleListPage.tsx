@@ -97,24 +97,41 @@ export function ScheduleListPage() {
 
   const onRunNow = async (s: ScheduleEntry) => {
     if (!confirm(`Run "${s.name}" now? A job will be queued and the next firing will be skipped.`)) return;
+
+    //--- Optimistic update: flip the row's badge to 'queued' BEFORE the
+    //--- API call returns so the user sees instant visual confirmation
+    //--- regardless of network latency or whether the backend has been
+    //--- rebuilt with the matching server-side change. The next silent
+    //--- reload (and the periodic polls) will overwrite this with the
+    //--- authoritative server state — dispatched / delivering / etc.
+    setItems(prev => prev.map(x => x.id === s.id
+      ? { ...x, last_status: 'queued', last_error: '' }
+      : x));
+
     try {
       await SchedulesAPI.runNow(s.id);
-      //--- First refresh silently so the table stays on-screen — the
-      //--- backend flipped last_status='queued', the row should now show
-      //--- the amber pulsing chip without the "Loading…" flash.
+    } catch (e: any) {
+      //--- Roll back the optimistic flag on a hard failure so the row
+      //--- doesn't sit forever as fake "queued".
+      setItems(prev => prev.map(x => x.id === s.id ? { ...x, last_status: s.last_status } : x));
+      alert(e.message ?? 'run-now failed');
+      return;
+    }
+
+    //--- Authoritative refresh, silent so the table doesn't blank.
+    await reload(true);
+    //--- Then poll every 2s for the first 30s (catches the scheduler tick
+    //--- ≤60s plus the dispatched→delivering→completed transitions),
+    //--- backing off to every 5s for another 2 minutes. All polls are
+    //--- silent so the badge animation stays continuous on-screen.
+    const startedAt = Date.now();
+    const tick = async () => {
+      const elapsed = Date.now() - startedAt;
+      if (elapsed > 2.5 * 60_000) return;
       await reload(true);
-      //--- Poll every 3s for 3 minutes; the scheduler tick is ≤60s so the
-      //--- queued → dispatched → delivering → completed transitions land
-      //--- well inside the window. All polls are silent so the table never
-      //--- blanks out; the status-badge animations carry the feedback.
-      const startedAt = Date.now();
-      const tick = async () => {
-        if (Date.now() - startedAt > 3 * 60_000) return;
-        await reload(true);
-        setTimeout(tick, 3000);
-      };
-      setTimeout(tick, 3000);
-    } catch (e: any) { alert(e.message ?? 'run-now failed'); }
+      setTimeout(tick, elapsed < 30_000 ? 2000 : 5000);
+    };
+    setTimeout(tick, 2000);
   };
 
   const onDuplicate = async (s: ScheduleEntry) => {
