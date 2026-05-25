@@ -68,15 +68,19 @@ export function ScheduleListPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const reload = async () => {
-    setLoading(true);
+  //--- `silent=true` skips the loading spinner so background polls (after
+  //--- Run-Now) update items in place without hiding the table — otherwise
+  //--- every 5s tick blanks the rows to "Loading…" and the status-badge
+  //--- transitions queued -> dispatched -> completed flash by invisibly.
+  const reload = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const [scs, rms] = await Promise.all([SchedulesAPI.list(), ReadyMadeAPI.list()]);
       setItems(scs);
       setReadyMades(new Map(rms.map(r => [r.id, r])));
       setError(null);
     } catch (e: any) { setError(e.message ?? 'failed'); }
-    finally { setLoading(false); }
+    finally { if (!silent) setLoading(false); }
   };
   useEffect(() => { reload(); }, []);
 
@@ -95,23 +99,21 @@ export function ScheduleListPage() {
     if (!confirm(`Run "${s.name}" now? A job will be queued and the next firing will be skipped.`)) return;
     try {
       await SchedulesAPI.runNow(s.id);
-      await reload();
-      //--- Backend just flipped last_status='queued' (visible immediately).
-      //--- The scheduler tick (≤60s) will move it through dispatched → delivering →
-      //--- completed/failed. Poll the list for 2 minutes so the user sees the
-      //--- transitions land without manually refreshing. Stop early once this
-      //--- schedule reports a terminal state.
+      //--- First refresh silently so the table stays on-screen — the
+      //--- backend flipped last_status='queued', the row should now show
+      //--- the amber pulsing chip without the "Loading…" flash.
+      await reload(true);
+      //--- Poll every 3s for 3 minutes; the scheduler tick is ≤60s so the
+      //--- queued → dispatched → delivering → completed transitions land
+      //--- well inside the window. All polls are silent so the table never
+      //--- blanks out; the status-badge animations carry the feedback.
       const startedAt = Date.now();
       const tick = async () => {
-        if (Date.now() - startedAt > 2 * 60_000) return;
-        await reload();
-        //--- Re-pull from a fresh snapshot — items state is captured in closure
-        //--- of the parent component, but reload() updates it asynchronously so
-        //--- we read via the closed-over `items` indirectly through reload's
-        //--- own state set. Simplest: just keep polling until the timeout.
-        setTimeout(tick, 5000);
+        if (Date.now() - startedAt > 3 * 60_000) return;
+        await reload(true);
+        setTimeout(tick, 3000);
       };
-      setTimeout(tick, 5000);
+      setTimeout(tick, 3000);
     } catch (e: any) { alert(e.message ?? 'run-now failed'); }
   };
 
