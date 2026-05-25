@@ -633,7 +633,10 @@ namespace
       std::string base = SettingsRepo::Get(db, "screenshot_url_base");
       if(base.empty()) base = "http://localhost:8090";
       const std::string tok = EnsureScreenshotToken(db);
-      const std::string path = "/jobs/" + std::to_string(job.id);
+      //--- ?_render=table strips the sidebar / breadcrumbs / action buttons
+      //--- so the screenshot focuses on the result table — see
+      //--- Layout.tsx + ResultViewPage.tsx for the chrome-stripping branch.
+      const std::string path = "/jobs/" + std::to_string(job.id) + "?_render=table";
 
       //--- URL-encode the redirect path (just /).
       auto urlenc = [](const std::string& s) {

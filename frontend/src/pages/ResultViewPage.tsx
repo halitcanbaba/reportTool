@@ -86,6 +86,67 @@ export function ResultViewPage() {
   const templateName = preview?.template_name ?? job.template_name ?? 'Template';
   const baseName = safeBaseName(`${templateName}${range?.from ? `_${range.from}` : ''}${range?.to && range.to !== range.from ? `_${range.to}` : ''}`);
 
+  //--- Headless-render mode: scheduler's screenshot captures load the page
+  //--- with ?_render=table so we strip the back button, breadcrumbs, status
+  //--- chip, and download / Telegram menus — the resulting PNG focuses on
+  //--- the data table. A compact title + date range stays so the recipient
+  //--- can tell which report they're looking at.
+  const renderMode = new URLSearchParams(window.location.search).get('_render');
+  const isRenderTable = renderMode === 'table';
+
+  //--- Shared table JSX so both the normal page and the render-only mode
+  //--- show identical cell formatting. The tableRef on the wrapper div is
+  //--- the same one the SendTelegramMenu's screenshot path uses.
+  const tableEl = preview && preview.columns && (
+    <div ref={tableRef} className="card overflow-auto">
+      <table className="min-w-full text-sm">
+        <thead className="bg-ink-50 border-b border-ink-100">
+          <tr>
+            {preview.columns.map(c => (
+              <th key={c.key} className={`px-3 py-2 text-${c.format === 'text' ? 'left' : 'right'} font-medium text-ink-600 uppercase text-xs tracking-wide`}>
+                {c.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {preview.rows.map((row, i) => (
+            <tr key={i} className="border-b border-ink-50 last:border-0">
+              {preview.columns.map((c, k) => {
+                const cell = row[k];
+                const align = c.format === 'text' ? 'text-left' : 'text-right tabular-nums';
+                return (
+                  <td key={c.key} className={`px-3 py-2 ${align} ${c.format === 'text' ? '' : 'font-mono'}`}>
+                    {fmtCell(cell ?? null, c)}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+          {preview.rows.length === 0 && (
+            <tr><td className="px-3 py-12 text-center text-ink-400" colSpan={preview.columns.length}>No rows.</td></tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  if (isRenderTable) {
+    return (
+      <div className="space-y-2">
+        <div>
+          <h1 className="text-base font-semibold text-ink-900">{templateName}</h1>
+          {range && (
+            <div className="text-xs text-ink-600 font-mono">
+              {range.from}{range.to && range.to !== range.from ? ` → ${range.to}` : ''}
+            </div>
+          )}
+        </div>
+        {tableEl}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-start justify-between">
@@ -174,39 +235,7 @@ export function ResultViewPage() {
         </div>
       )}
 
-      {preview && preview.columns && (
-        <div ref={tableRef} className="card overflow-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-ink-50 border-b border-ink-100">
-              <tr>
-                {preview.columns.map(c => (
-                  <th key={c.key} className={`px-3 py-2 text-${c.format === 'text' ? 'left' : 'right'} font-medium text-ink-600 uppercase text-xs tracking-wide`}>
-                    {c.label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {preview.rows.map((row, i) => (
-                <tr key={i} className="border-b border-ink-50 last:border-0">
-                  {preview.columns.map((c, k) => {
-                    const cell = row[k];
-                    const align = c.format === 'text' ? 'text-left' : 'text-right tabular-nums';
-                    return (
-                      <td key={c.key} className={`px-3 py-2 ${align} ${c.format === 'text' ? '' : 'font-mono'}`}>
-                        {fmtCell(cell ?? null, c)}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-              {preview.rows.length === 0 && (
-                <tr><td className="px-3 py-12 text-center text-ink-400" colSpan={preview.columns.length}>No rows.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {tableEl}
 
       {preview && (
         <div className="text-xs text-ink-500">
