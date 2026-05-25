@@ -74,7 +74,12 @@ export function ScheduleListPage() {
   //--- after onRunNow would otherwise read a stale closure that doesn't
   //--- include the just-clicked id and instantly overwrite the optimistic
   //--- 'queued' chip with whatever the backend returned.
-  const pendingRunRef = useRef<Map<number, number>>(new Map());
+  //--- client is Date.now() at click (drives elapsed/dwell timers, which
+  //--- must use the client clock to stay aligned with setTimeout). server
+  //--- is the backend's queued_for (epoch ms) at click — compared against
+  //--- last_run_at (also server clock) for the fresh-run check, so client
+  //--- clock drift never turns a real run into a stale-looking 'completed'.
+  const pendingRunRef = useRef<Map<number, { client: number; server: number }>>(new Map());
 
   //--- Minimum visible time for the 'queued' chip after a manual run.
   //--- Without this, a fast pipeline (csv format, scheduler tick fires
@@ -93,10 +98,10 @@ export function ScheduleListPage() {
       setItems(prevItems => {
         const prevById = new Map(prevItems.map(it => [it.id, it]));
         return scs.map(s => {
-          const startedAt = pendingRunRef.current.get(s.id);
-          if (startedAt == null) return s;
+          const stamps = pendingRunRef.current.get(s.id);
+          if (stamps == null) return s;
 
-          const elapsed = Date.now() - startedAt;
+          const elapsed = Date.now() - stamps.client;
           //--- Phase 1 — dwell window: keep the chip visibly 'queued' no
           //--- matter what the backend says, so a sub-3-second pipeline
           //--- still surfaces the "click registered" feedback.
@@ -107,9 +112,13 @@ export function ScheduleListPage() {
           //--- Phase 2 — past dwell. If the backend is still flat (''),
           //--- or still showing the prior 'completed' for our schedule
           //--- (its last_run_at is older than our click), hold queued.
+          //--- Compare last_run_at against the SERVER's queued_for, not
+          //--- the client clock — otherwise a few seconds of drift can
+          //--- make a real, fresh dispatch look stale and the chip stays
+          //--- stuck in queued until the 5min timeout.
           const prev = prevById.get(s.id);
           const prevWasQueued = prev?.last_status === 'queued';
-          const serverHasFreshRun = s.last_run_at * 1000 >= startedAt - 2000;
+          const serverHasFreshRun = s.last_run_at * 1000 >= stamps.server - 2000;
           const serverBehind = s.last_status === ''
                             || (s.last_status === 'completed' && prevWasQueued && !serverHasFreshRun);
           if (serverBehind) return { ...s, last_status: 'queued' };
@@ -145,8 +154,11 @@ export function ScheduleListPage() {
     //--- the API call) reads the latest pending set. State-only tracking
     //--- would lose this race because setState is queued and the closure
     //--- captured by reload reflects the PREVIOUS render's snapshot.
-    const startedAt = Date.now();
-    pendingRunRef.current.set(s.id, startedAt);
+    //--- Seed with client time; we'll overwrite with the server's
+    //--- queued_for as soon as the API responds so the fresh-run check
+    //--- compares two values in the same clock domain.
+    const clientStartedAt = Date.now();
+    pendingRunRef.current.set(s.id, { client: clientStartedAt, server: clientStartedAt });
 
     //--- Optimistic chip on the row itself for instant feedback. The
     //--- dwell logic in reload() then HOLDS this chip for at least
@@ -156,8 +168,16 @@ export function ScheduleListPage() {
       ? { ...x, last_status: 'queued', last_error: '' }
       : x));
 
+    let serverStartedAt = clientStartedAt;
     try {
-      await SchedulesAPI.runNow(s.id);
+      const r = await SchedulesAPI.runNow(s.id);
+      //--- queued_for is the server's wall-clock time (epoch seconds)
+      //--- at which it accepted the request. Use that as the canonical
+      //--- "did this run start before or after backend's last_run_at"
+      //--- check — eliminates client/server clock-drift false-negatives
+      //--- that would otherwise leave the chip stuck on 'queued'.
+      if (typeof r?.queued_for === 'number') serverStartedAt = r.queued_for * 1000;
+      pendingRunRef.current.set(s.id, { client: clientStartedAt, server: serverStartedAt });
     } catch (e: any) {
       pendingRunRef.current.delete(s.id);
       setItems(prev => prev.map(x => x.id === s.id ? { ...x, last_status: s.last_status } : x));
@@ -174,7 +194,7 @@ export function ScheduleListPage() {
     //--- schedule reaches a terminal state so we don't burn cycles.
     const POLL_WINDOW_MS = 5 * 60_000;
     const tick = async () => {
-      const elapsed = Date.now() - startedAt;
+      const elapsed = Date.now() - clientStartedAt;
       if (elapsed > POLL_WINDOW_MS) {
         pendingRunRef.current.delete(s.id);
         return;
@@ -182,12 +202,14 @@ export function ScheduleListPage() {
       await reload(true);
       //--- Peek at the latest items via the setter callback; if the row
       //--- has reached a fresh-run terminal state ('completed'/'failed'
-      //--- with last_run_at past the click), we're done.
+      //--- with last_run_at past THIS run's server-side start), we're
+      //--- done. Compare both in epoch-ms server clock so client clock
+      //--- drift never makes a real completion look stale.
       let reachedTerminal = false;
       setItems(curr => {
         const row = curr.find(x => x.id === s.id);
         if (row) {
-          const fresh = row.last_run_at * 1000 >= startedAt - 2000;
+          const fresh = row.last_run_at * 1000 >= serverStartedAt - 2000;
           const term  = row.last_status === 'completed' || row.last_status === 'failed';
           if (fresh && term) reachedTerminal = true;
         }

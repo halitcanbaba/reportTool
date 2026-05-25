@@ -164,9 +164,16 @@ void ScheduleRoutes::Register(httplib::Server& srv, AppContext* ctx)
       if(!cur) { SendError(res, 404, "schedule not found"); return; }
       ScheduleEntry s = *cur;
       s.next_run_at = (int64_t)time(nullptr);
-      s.last_status = "queued";   // visible cue; ListDue still picks it up
-      s.last_error  = "";
       ScheduleRepo::Update(*ctx->db, s);
+      //--- Update() above writes the editable columns but deliberately
+      //--- skips last_status/last_error so an unrelated PUT from the
+      //--- edit page never clobbers in-flight delivery state. For
+      //--- run-now we DO want those reset, so flip them in a separate
+      //--- call. Without this, the DB row keeps last_status='completed'
+      //--- from the previous run and any UI client without an active
+      //--- pending-ref guard sees a stale 'completed' chip until the
+      //--- scheduler tick (≤60s) finally rewrites the row.
+      ScheduleRepo::UpdateDelivery(*ctx->db, id, "queued", "");
       res.set_content(json{{"queued_for", s.next_run_at}}.dump(), "application/json");
    });
 }
