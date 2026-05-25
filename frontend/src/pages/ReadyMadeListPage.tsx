@@ -6,6 +6,7 @@ import { AccountFiltersAPI } from '../api/accountFilters';
 import { ManagersAPI } from '../api/managers';
 import { AccountFilterPicker } from '../components/AccountFilterPicker';
 import { CompactDateRangeFields } from '../components/CompactDateRangeFields';
+import { SearchableSelect, type SearchableOption } from '../components/SearchableSelect';
 import { resolvePreset } from '../lib/dateRange';
 import { fmtDateTime, todayLocal } from '../utils/format';
 import { copyName } from '../lib/duplicate';
@@ -42,22 +43,54 @@ export function ReadyMadeListPage() {
   const [error, setError] = useState<string | null>(null);
   const [runWith, setRunWith] = useState<ReadyMadeReport | null>(null);
 
+  //--- Per-entity folder caches so the inline picker columns can show
+  //--- "(in Folder)" hints next to each option. Templates list grows
+  //--- quickly; without folder context the inline edit dropdown is
+  //--- effectively unsearchable.
+  const [templateFolders,      setTemplateFolders]      = useState<Folder[]>([]);
+  const [accountFilterFolders, setAccountFilterFolders] = useState<Folder[]>([]);
+
   const reload = async () => {
     setLoading(true);
     try {
-      const [rms, tpls, afs] = await Promise.all([
+      const [rms, tpls, afs, tflds, aflds] = await Promise.all([
         ReadyMadeAPI.list(),
         TemplatesAPI.list(),
         AccountFiltersAPI.list(),
+        FoldersAPI.list('template').catch(() => [] as Folder[]),
+        FoldersAPI.list('account_filter').catch(() => [] as Folder[]),
       ]);
       setItems(rms);
       setTemplates(new Map(tpls.map(t => [t.id, t])));
       setFilters(new Map(afs.map(f => [f.id, f])));
+      setTemplateFolders(tflds);
+      setAccountFilterFolders(aflds);
       setError(null);
     } catch (e: any) { setError(e.message ?? 'failed'); }
     finally { setLoading(false); }
   };
   useEffect(() => { reload(); }, []);
+
+  //--- Memo-built option lists used by both the inline edit pickers and
+  //--- the bound-row hint that surfaces a missing template's id.
+  const templateOptions: SearchableOption<number>[] = (() => {
+    const fn = new Map(templateFolders.map(f => [f.id, f.name]));
+    return Array.from(templates.values())
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(t => ({
+        value: t.id, label: t.name,
+        hint: t.folder_id ? (fn.get(t.folder_id) ?? '') : '',
+      }));
+  })();
+  const accountFilterOptions: SearchableOption<number>[] = (() => {
+    const fn = new Map(accountFilterFolders.map(f => [f.id, f.name]));
+    return Array.from(filters.values())
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(f => ({
+        value: f.id, label: f.name + (f.manager_id ? ' (bound)' : ''),
+        hint: f.folder_id ? (fn.get(f.folder_id) ?? '') : '',
+      }));
+  })();
 
   const onDelete = async (id: number, name: string) => {
     if (!confirm(`Delete ready-made report "${name}"? Schedules referencing it will block the delete.`)) return;
@@ -131,41 +164,47 @@ export function ReadyMadeListPage() {
       key: 'template', header: 'Template', searchable: true,
       searchValue: rm => templates.get(rm.template_id)?.name ?? '',
       render: rm => (
-        <select className="text-xs border border-ink-200 bg-white rounded px-1 py-0.5 max-w-[180px]"
-                value={rm.template_id}
-                title="Change template"
-                onPointerDown={e => e.stopPropagation()}
-                onClick={e => e.stopPropagation()}
-                onChange={async e => {
-                  const next = Number(e.target.value);
-                  if (next === rm.template_id) return;
-                  try { await patchReadyMade(rm, { template_id: next }); }
-                  catch (err: any) { alert(err?.message ?? 'save failed'); }
-                }}>
-          {!templates.has(rm.template_id) && <option value={rm.template_id}>missing #{rm.template_id}</option>}
-          {Array.from(templates.values()).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-        </select>
+        //--- Stop drag/click bubbling so the inline picker doesn't
+        //--- accidentally drag the row when the user clicks inside.
+        <div className="max-w-[220px]"
+             onPointerDown={e => e.stopPropagation()}
+             onClick={e => e.stopPropagation()}>
+          <SearchableSelect<number>
+            options={!templates.has(rm.template_id)
+              ? [{ value: rm.template_id, label: `missing #${rm.template_id}` }, ...templateOptions]
+              : templateOptions}
+            value={rm.template_id}
+            onChange={async v => {
+              if (v == null || v === rm.template_id) return;
+              try { await patchReadyMade(rm, { template_id: v }); }
+              catch (err: any) { alert(err?.message ?? 'save failed'); }
+            }}
+            placeholder="search by name / folder…"
+            emptyLabel="— select template —"
+          />
+        </div>
       ),
     },
     {
       key: 'account_filter', header: 'Account filter', searchable: true,
       searchValue: rm => (rm.account_filter_id ? filters.get(rm.account_filter_id)?.name ?? '' : ''),
       render: rm => (
-        <select className="text-xs border border-ink-200 bg-white rounded px-1 py-0.5 max-w-[180px]"
-                value={rm.account_filter_id ?? ''}
-                title="Change account filter"
-                onPointerDown={e => e.stopPropagation()}
-                onClick={e => e.stopPropagation()}
-                onChange={async e => {
-                  const raw = e.target.value;
-                  const next = raw === '' ? null : Number(raw);
-                  if (next === (rm.account_filter_id ?? null)) return;
-                  try { await patchReadyMade(rm, { account_filter_id: next as any }); }
-                  catch (err: any) { alert(err?.message ?? 'save failed'); }
-                }}>
-          <option value="">— manager defaults —</option>
-          {Array.from(filters.values()).map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-        </select>
+        <div className="max-w-[220px]"
+             onPointerDown={e => e.stopPropagation()}
+             onClick={e => e.stopPropagation()}>
+          <SearchableSelect<number>
+            options={accountFilterOptions}
+            value={rm.account_filter_id ?? null}
+            onChange={async v => {
+              const next = v ?? null;
+              if (next === (rm.account_filter_id ?? null)) return;
+              try { await patchReadyMade(rm, { account_filter_id: next as any }); }
+              catch (err: any) { alert(err?.message ?? 'save failed'); }
+            }}
+            placeholder="search by name / folder…"
+            emptyLabel="— manager defaults —"
+          />
+        </div>
       ),
     },
     {
