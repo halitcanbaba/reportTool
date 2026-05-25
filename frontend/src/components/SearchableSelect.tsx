@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 //--- Generic single-select combobox with type-to-filter. Used wherever a
 //--- plain <select> grows past ~10 entries and becomes hard to scan —
@@ -30,18 +31,51 @@ export function SearchableSelect<V extends string | number>({
 }: Props<V>) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
+  const [popRect, setPopRect] = useState<{ top: number; left: number; width: number; flipUp: boolean } | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  //--- Compute the popover's screen-pixel position from the trigger
+  //--- button's getBoundingClientRect. The popover is portaled into
+  //--- document.body so a clipping ancestor (FolderedCard's overflow,
+  //--- a card with overflow-hidden, etc.) can't crop it.
+  useLayoutEffect(() => {
+    if (!open) { setPopRect(null); return; }
+    const recompute = () => {
+      if (!wrapRef.current) return;
+      const r = wrapRef.current.getBoundingClientRect();
+      //--- 360px popover max-height; flip above the trigger when there
+      //--- isn't enough room below (e.g. trigger near viewport bottom).
+      const spaceBelow = window.innerHeight - r.bottom;
+      const flipUp = spaceBelow < 280 && r.top > 280;
+      setPopRect({
+        top:   flipUp ? r.top - 6 : r.bottom + 4,
+        left:  r.left,
+        width: r.width,
+        flipUp,
+      });
+    };
+    recompute();
+    window.addEventListener('scroll', recompute, true);
+    window.addEventListener('resize', recompute);
+    return () => {
+      window.removeEventListener('scroll', recompute, true);
+      window.removeEventListener('resize', recompute);
+    };
+  }, [open]);
+
   //--- Close on outside click. Pointerdown captures the click before any
-  //--- option's onClick fires so selecting still works.
+  //--- option's onClick fires so selecting still works. Trigger AND
+  //--- popover (portaled) are both whitelisted.
   useEffect(() => {
     if (!open) return;
     const onDown = (e: PointerEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
-        setOpen(false);
-        setQ('');
-      }
+      const t = e.target as Node;
+      if (wrapRef.current?.contains(t)) return;
+      if (popRef.current?.contains(t)) return;
+      setOpen(false);
+      setQ('');
     };
     document.addEventListener('pointerdown', onDown);
     return () => document.removeEventListener('pointerdown', onDown);
@@ -84,9 +118,22 @@ export function SearchableSelect<V extends string | number>({
         <span className="text-ink-400 text-xs">▾</span>
       </button>
 
-      {open && (
-        <div className="absolute z-30 left-0 right-0 mt-1 bg-white border border-ink-200 rounded-md shadow-lg max-h-80 overflow-hidden flex flex-col">
-          <div className="p-2 border-b border-ink-100 sticky top-0 bg-white">
+      {open && popRect && createPortal(
+        <div
+          ref={popRef}
+          style={{
+            position: 'fixed',
+            top:    popRect.flipUp ? undefined : popRect.top,
+            bottom: popRect.flipUp ? (window.innerHeight - popRect.top) : undefined,
+            left:   popRect.left,
+            width:  popRect.width,
+            //--- Sits above the app shell (sidebar z-20, modals z-50). 60
+            //--- clears the FolderedCard's drag overlays as well.
+            zIndex: 60,
+          }}
+          className="bg-white border border-ink-200 rounded-md shadow-lg max-h-[360px] overflow-hidden flex flex-col"
+        >
+          <div className="p-2 border-b border-ink-100 bg-white">
             <input
               ref={inputRef}
               className="input text-sm w-full"
@@ -105,7 +152,7 @@ export function SearchableSelect<V extends string | number>({
               {filtered.length} / {options.length} · Enter selects first match
             </div>
           </div>
-          <ul className="overflow-y-auto">
+          <ul className="overflow-y-auto flex-1">
             {filtered.length === 0 && (
               <li className="px-3 py-2 text-sm text-ink-400">no matches</li>
             )}
@@ -142,7 +189,8 @@ export function SearchableSelect<V extends string | number>({
               ✕ Clear selection
             </button>
           )}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
