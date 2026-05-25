@@ -4,9 +4,11 @@ import { ReadyMadeAPI } from '../api/readyMade';
 import { TemplatesAPI } from '../api/templates';
 import { AccountFiltersAPI } from '../api/accountFilters';
 import { DepositFiltersAPI } from '../api/depositFilters';
+import { FoldersAPI } from '../api/folders';
 import { DateStrategyPicker } from '../components/DateStrategyPicker';
 import { Breadcrumbs } from '../components/Breadcrumbs';
-import type { ReadyMadeReportInput, Template, AccountFilter, DepositFilter } from '../types';
+import { SearchableSelect, type SearchableOption } from '../components/SearchableSelect';
+import type { ReadyMadeReportInput, Template, AccountFilter, DepositFilter, Folder } from '../types';
 
 const empty: ReadyMadeReportInput = {
   name: '',
@@ -30,6 +32,11 @@ export function ReadyMadeEditPage() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [filters, setFilters] = useState<AccountFilter[]>([]);
   const [depositFilters, setDepositFilters] = useState<DepositFilter[]>([]);
+  //--- Folder name lookup so the template / account-filter dropdowns can
+  //--- surface "(in Folder Name)" next to each entry — critical once the
+  //--- list grows past a couple of folders.
+  const [templateFolders,      setTemplateFolders]      = useState<Folder[]>([]);
+  const [accountFilterFolders, setAccountFilterFolders] = useState<Folder[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -37,6 +44,8 @@ export function ReadyMadeEditPage() {
     TemplatesAPI.list().then(setTemplates).catch(() => {});
     AccountFiltersAPI.list().then(setFilters).catch(() => {});
     DepositFiltersAPI.list().then(setDepositFilters).catch(() => {});
+    FoldersAPI.list('template').then(setTemplateFolders).catch(() => {});
+    FoldersAPI.list('account_filter').then(setAccountFilterFolders).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -61,6 +70,33 @@ export function ReadyMadeEditPage() {
     () => templates.find(t => t.id === form.template_id) ?? null,
     [templates, form.template_id]
   );
+
+  //--- Build the dropdown options for the template + account-filter
+  //--- searchable selects. Each option gets the folder name as a `hint`
+  //--- so users can locate "monthly_summary" in "Reports / Trive" at a
+  //--- glance instead of scrolling a flat alphabetical list.
+  const templateOptions: SearchableOption<number>[] = useMemo(() => {
+    const folderName = new Map(templateFolders.map(f => [f.id, f.name]));
+    return [...templates]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(t => ({
+        value: t.id,
+        label: t.name,
+        hint:  t.folder_id ? (folderName.get(t.folder_id) ?? '') : '',
+        sub:   t.description || undefined,
+      }));
+  }, [templates, templateFolders]);
+
+  const accountFilterOptions: SearchableOption<number>[] = useMemo(() => {
+    const folderName = new Map(accountFilterFolders.map(f => [f.id, f.name]));
+    return [...filters]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(f => ({
+        value: f.id,
+        label: f.name + (f.manager_id ? ' (bound)' : ''),
+        hint:  f.folder_id ? (folderName.get(f.folder_id) ?? '') : '',
+      }));
+  }, [filters, accountFilterFolders]);
 
   const update = <K extends keyof ReadyMadeReportInput>(k: K, v: ReadyMadeReportInput[K]) =>
     setForm(prev => ({ ...prev, [k]: v }));
@@ -115,11 +151,13 @@ export function ReadyMadeEditPage() {
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="label">Template</label>
-            <select className="input" value={form.template_id || ''}
-                    onChange={e => update('template_id', Number(e.target.value))}>
-              <option value="">— select template —</option>
-              {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
+            <SearchableSelect<number>
+              options={templateOptions}
+              value={form.template_id || null}
+              onChange={v => update('template_id', v ?? 0)}
+              placeholder="search by name / folder…"
+              emptyLabel="— select template —"
+            />
             {selectedTemplate && (
               <div className="text-xs text-ink-500 mt-1">
                 date params: <span className="font-mono">{selectedTemplate.date_params.join(', ') || 'none'}</span> · default top {selectedTemplate.default_top_n}
@@ -128,13 +166,13 @@ export function ReadyMadeEditPage() {
           </div>
           <div>
             <label className="label">Account filter (optional)</label>
-            <select className="input" value={form.account_filter_id ?? ''}
-                    onChange={e => update('account_filter_id', e.target.value ? Number(e.target.value) : null)}>
-              <option value="">— manager defaults —</option>
-              {filters.map(f => (
-                <option key={f.id} value={f.id}>{f.name}{f.manager_id ? ' (bound)' : ''}</option>
-              ))}
-            </select>
+            <SearchableSelect<number>
+              options={accountFilterOptions}
+              value={form.account_filter_id}
+              onChange={v => update('account_filter_id', v)}
+              placeholder="search by name / folder…"
+              emptyLabel="— manager defaults —"
+            />
             <div className="text-xs text-ink-500 mt-1">
               Bound filters carry their own manager; generic filters require a manager override at run time.
             </div>
