@@ -69,6 +69,38 @@ void SettingsRoutes::Register(httplib::Server& srv, AppContext* ctx)
       res.set_content(R"({"ok":true})", "application/json");
    });
 
+   //--- Screenshot delivery config: which public base URL the headless
+   //--- browser should hit when capturing a result page. The bootstrap
+   //--- endpoint that hands out the render cookie is on the same origin
+   //--- so the cookie scopes correctly to the SPA's /api calls. Default
+   //--- "http://localhost:8090" matches the project's nginx convention;
+   //--- when nginx is on a different port (or the user wants to drive
+   //--- the renderer at the backend directly without nginx) set this
+   //--- to that origin.
+   srv.Get("/api/settings/screenshot", [ctx](const httplib::Request&, httplib::Response& res){
+      std::string base = SettingsRepo::Get(*ctx->db, "screenshot_url_base");
+      if(base.empty()) base = "http://localhost:8090";
+      const bool has_token = !SettingsRepo::Get(*ctx->db, "screenshot_token").empty();
+      res.set_content(json{
+         { "url_base",   base },
+         { "configured", has_token },
+      }.dump(), "application/json");
+   });
+
+   srv.Put("/api/settings/screenshot", [ctx](const httplib::Request& req, httplib::Response& res){
+      json j = json::parse(req.body, nullptr, false);
+      if(j.is_discarded() || !j.is_object()) { SendError(res, 400, "invalid json"); return; }
+      if(j.contains("url_base") && j["url_base"].is_string())
+      {
+         std::string v = j["url_base"].get<std::string>();
+         //--- Strip trailing slash so we don't get "//api/auth/..." when the
+         //--- scheduler concats the bootstrap path.
+         while(!v.empty() && v.back() == '/') v.pop_back();
+         SettingsRepo::Set(*ctx->db, "screenshot_url_base", v);
+      }
+      res.set_content(R"({"ok":true})", "application/json");
+   });
+
    //--- Test the configured bot+chat by sending a probe message.
    srv.Post("/api/settings/telegram/test", [ctx](const httplib::Request& req, httplib::Response& res){
       json j = json::parse(req.body, nullptr, false);
