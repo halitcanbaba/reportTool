@@ -179,16 +179,25 @@ void HttpServer::RegisterAuthMiddleware()
          //--- short-lived "rt_screenshot" cookie whose value matches the
          //--- server-side `screenshot_token` setting; subsequent /api/*
          //--- requests from the headless browser carry it automatically.
-         //--- Treated as anonymous read-only access — admin-only routes
-         //--- still 403 because no user/role is attached.
+         //--- Treated as a synthetic viewer (id=-1) so /api/auth/me has
+         //--- something to return — without that the SPA's AuthContext
+         //--- decides the session is dead and routes the page to /login,
+         //--- which is what the screenshot then captures.
          const std::string cookie = req.get_header_value("Cookie");
          const std::string ss = ExtractCookie(cookie, "rt_screenshot");
          if(!ss.empty()) {
             const std::string expected = SettingsRepo::Get(*ctx->db, "screenshot_token");
             if(!expected.empty() && ss == expected) {
-               //--- Allow read-only API access without a real session. We
-               //--- don't set CurrentUser, so admin-only checks fall back
-               //--- to 403 — exactly what we want for a render bot.
+               //--- Synthetic bot user so /api/auth/me succeeds. Admin
+               //--- writes still 403 below — render bot is read-only.
+               User bot;
+               bot.id         = -1;
+               bot.username   = "screenshot-bot";
+               bot.role       = "viewer";
+               bot.active     = true;
+               bot.created_at = 0;
+               bot.updated_at = 0;
+               CurrentUser::Set(bot, "");
                if(RequiresAdmin(req)) {
                   Reply403(res);
                   return httplib::Server::HandlerResponse::Handled;
