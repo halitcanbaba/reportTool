@@ -66,8 +66,13 @@ namespace
          s->every_n_hours    = j.value("every_n_hours",    1);
          s->telegram_chat_id = j.value("telegram_chat_id", std::string());
          s->delivery_format  = j.value("delivery_format",  std::string("csv"));
-         if(s->delivery_format != "csv" && s->delivery_format != "text")
-            { *err = "delivery_format must be 'csv' or 'text'"; return false; }
+         //--- Kept in sync with Scheduler::TickOnce branches and the
+         //--- frontend ScheduleDeliveryFormat union. New types here MUST
+         //--- have a matching dispatcher arm in Scheduler.cpp.
+         if(s->delivery_format != "csv"   && s->delivery_format != "text"
+         && s->delivery_format != "xlsx"  && s->delivery_format != "pdf"
+         && s->delivery_format != "image")
+            { *err = "delivery_format must be 'csv' | 'text' | 'xlsx' | 'pdf' | 'image'"; return false; }
          s->enabled          = j.value("enabled",          true);
          //--- Preserve current folder_id when the key is absent (PATCH semantics).
          //--- Explicit null clears the folder; integer sets it. Caller seeds *s
