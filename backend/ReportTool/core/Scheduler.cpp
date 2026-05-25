@@ -783,6 +783,105 @@ void Scheduler::TickOnce()
          text += "Logins   " + std::to_string(total_logins);
          text += "</pre>";
 
+         //--- Data table dump: read the persisted CSV and render as a
+         //--- monospaced text table inside a <pre> block. Telegram caps
+         //--- messages at 4096 chars (HTML tags counted); keep ~3500 char
+         //--- budget for the table after the header/KPI block. Stop adding
+         //--- rows once the cumulative length would overflow; append a
+         //--- "… N more rows" footer so the recipient knows it's truncated.
+         do {
+            if(job->csv_filename.empty()) break;
+            const std::string csv_path = job->output_dir + "/" + job->csv_filename;
+            const std::string csv_text = ReadFile(csv_path);
+            if(csv_text.empty()) break;
+
+            auto tpl = TemplateRepo::Get(*m_ctx->db, job->template_id);
+
+            CsvParser p{ csv_text };
+            std::vector<std::string> first_row;
+            if(!p.NextRow(first_row)) break;
+
+            //--- Headers: prefer template labels (user-friendly) over the
+            //--- CSV's raw column keys.
+            std::vector<std::string> headers;
+            if(tpl && !tpl->columns.empty())
+            {
+               for(const auto& c : tpl->columns) headers.push_back(c.label);
+            }
+            else headers = first_row;
+
+            //--- Collect rows + compute per-column widths (header + every
+            //--- data cell, capped at 18 chars per column so a wide string
+            //--- can't push the whole line off Telegram's mobile screen).
+            std::vector<std::vector<std::string>> rows;
+            std::vector<std::string> raw;
+            while(p.NextRow(raw)) rows.push_back(std::move(raw));
+
+            const size_t ncols = std::min(headers.size(),
+                                          rows.empty() ? headers.size() : rows[0].size());
+            if(ncols == 0) break;
+
+            std::vector<size_t> widths(ncols, 0);
+            for(size_t c = 0; c < ncols; ++c)
+            {
+               widths[c] = headers[c].size();
+               for(const auto& r2 : rows)
+                  if(c < r2.size()) widths[c] = std::max(widths[c], r2[c].size());
+               if(widths[c] > 18) widths[c] = 18;
+               if(widths[c] < 3)  widths[c] = 3;
+            }
+
+            auto pad = [](const std::string& s, size_t w) {
+               if(s.size() >= w) return s.substr(0, w);
+               return s + std::string(w - s.size(), ' ');
+            };
+            auto render_row = [&](const std::vector<std::string>& cells) {
+               std::string line;
+               for(size_t c = 0; c < ncols; ++c)
+               {
+                  if(c > 0) line += "  ";
+                  line += pad(c < cells.size() ? cells[c] : std::string(), widths[c]);
+               }
+               return line;
+            };
+
+            //--- Telegram budget: stay under 3800 chars total so we have
+            //--- headroom for the closing tags and the truncation footer.
+            constexpr size_t kBudget = 3800;
+            std::string table = "\n<pre>";
+            table += esc(render_row(headers));
+            table += "\n";
+            //--- Underline row: dashes the same width as each column.
+            {
+               std::string sep;
+               for(size_t c = 0; c < ncols; ++c)
+               {
+                  if(c > 0) sep += "  ";
+                  sep += std::string(widths[c], '-');
+               }
+               table += esc(sep);
+               table += "\n";
+            }
+
+            size_t emitted = 0;
+            for(size_t i = 0; i < rows.size(); ++i)
+            {
+               const std::string line = esc(render_row(rows[i])) + "\n";
+               //--- +20 = closing </pre> + truncation footer headroom.
+               if(text.size() + table.size() + line.size() + 20 > kBudget) break;
+               table += line;
+               ++emitted;
+            }
+            table += "</pre>";
+            if(emitted < rows.size())
+            {
+               table += "<i>… " + std::to_string(rows.size() - emitted)
+                      + " more row" + (rows.size() - emitted == 1 ? "" : "s")
+                      + " (download CSV for full set)</i>";
+            }
+            text += table;
+         } while(false);
+
          //--- Telegram caps at 4096 chars (counting tags). Stay well under.
          if(text.size() > 3800) text = text.substr(0, 3800) + "…";
          r = TelegramClient::SendMessage(token, chat, text, "HTML");
