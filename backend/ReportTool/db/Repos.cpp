@@ -340,55 +340,42 @@ bool AccountFilterRepo::Delete(SqliteDb& db, int64_t id)
 
 namespace
 {
-   //--- buckets_json is a JSON array: [{"key","label","predicate":<pred>}].
-   std::string BucketsToJson(const std::vector<DepositFilterBucket>& bs)
+   //--- Each named slot serializes a single Predicate; empty string when the
+   //--- slot is unset so that broker conventions can leave categories blank.
+   std::string PredToJson(const std::shared_ptr<Predicate>& p)
    {
-      nlohmann::json out = nlohmann::json::array();
-      for(const auto& b : bs)
-      {
-         nlohmann::json bj{
-            { "key",   b.key },
-            { "label", b.label },
-         };
-         if(b.predicate) bj["predicate"] = Expression::PredicateToJson(*b.predicate);
-         else            bj["predicate"] = nullptr;
-         out.push_back(std::move(bj));
-      }
-      return out.dump();
+      if(!p) return "";
+      return Expression::PredicateToJson(*p).dump();
    }
 
-   std::vector<DepositFilterBucket> BucketsFromJson(const std::string& s)
+   std::shared_ptr<Predicate> PredFromJson(const std::string& s)
    {
-      std::vector<DepositFilterBucket> out;
-      if(s.empty()) return out;
+      if(s.empty()) return nullptr;
       auto j = nlohmann::json::parse(s, nullptr, false);
-      if(j.is_discarded() || !j.is_array()) return out;
-      for(const auto& bj : j)
-      {
-         if(!bj.is_object()) continue;
-         DepositFilterBucket b;
-         b.key   = bj.value("key",   std::string());
-         b.label = bj.value("label", std::string());
-         if(bj.contains("predicate") && !bj["predicate"].is_null())
-         {
-            std::string err;
-            Expression::PredicateFromJson(bj["predicate"], &b.predicate, &err);
-         }
-         out.push_back(std::move(b));
-      }
+      if(j.is_discarded() || j.is_null()) return nullptr;
+      std::shared_ptr<Predicate> out;
+      std::string err;
+      Expression::PredicateFromJson(j, &out, &err);
       return out;
    }
 
    void FillDepositFilterFromStmt(SqliteStmt& st, DepositFilter& f)
    {
-      f.id          = st.ColI64(0);
-      f.name        = st.ColText(1);
-      f.description = st.ColText(2);
-      f.buckets     = BucketsFromJson(st.ColText(3));
-      f.sort_order  = st.ColInt(4);
-      f.created_at  = st.ColI64(5);
-      f.updated_at  = st.ColI64(6);
+      f.id              = st.ColI64(0);
+      f.name            = st.ColText(1);
+      f.description     = st.ColText(2);
+      f.cash_deposit    = PredFromJson(st.ColText(3));
+      f.cash_withdrawal = PredFromJson(st.ColText(4));
+      f.promotion       = PredFromJson(st.ColText(5));
+      f.rebate          = PredFromJson(st.ColText(6));
+      f.sort_order      = st.ColInt(7);
+      f.created_at      = st.ColI64(8);
+      f.updated_at      = st.ColI64(9);
    }
+
+   constexpr const char* kDepositFilterCols =
+      "id,name,description,cash_deposit_json,cash_withdrawal_json,"
+      "promotion_json,rebate_json,sort_order,created_at,updated_at";
 }
 
 std::vector<DepositFilter> DepositFilterRepo::ListAll(SqliteDb& db)
@@ -396,8 +383,8 @@ std::vector<DepositFilter> DepositFilterRepo::ListAll(SqliteDb& db)
    std::lock_guard<std::mutex> lock(db.Mutex());
    std::vector<DepositFilter> out;
    SqliteStmt st(db,
-      "SELECT id,name,description,buckets_json,sort_order,created_at,updated_at "
-      "FROM deposit_filters ORDER BY sort_order, id");
+      std::string("SELECT ") + kDepositFilterCols +
+      " FROM deposit_filters ORDER BY sort_order, id");
    while(st.Step())
    {
       DepositFilter f; FillDepositFilterFromStmt(st, f);
@@ -410,8 +397,8 @@ std::optional<DepositFilter> DepositFilterRepo::Get(SqliteDb& db, int64_t id)
 {
    std::lock_guard<std::mutex> lock(db.Mutex());
    SqliteStmt st(db,
-      "SELECT id,name,description,buckets_json,sort_order,created_at,updated_at "
-      "FROM deposit_filters WHERE id=?");
+      std::string("SELECT ") + kDepositFilterCols +
+      " FROM deposit_filters WHERE id=?");
    st.BindI64(1, id);
    if(!st.Step()) return std::nullopt;
    DepositFilter f; FillDepositFilterFromStmt(st, f);
@@ -423,14 +410,19 @@ int64_t DepositFilterRepo::Insert(SqliteDb& db, DepositFilter& f)
    std::lock_guard<std::mutex> lock(db.Mutex());
    const int64_t now = (int64_t)time(nullptr);
    SqliteStmt st(db,
-      "INSERT INTO deposit_filters(name,description,buckets_json,sort_order,created_at,updated_at) "
-      "VALUES(?,?,?,?,?,?)");
+      "INSERT INTO deposit_filters("
+      "name,description,cash_deposit_json,cash_withdrawal_json,"
+      "promotion_json,rebate_json,sort_order,created_at,updated_at) "
+      "VALUES(?,?,?,?,?,?,?,?,?)");
    st.BindText(1, f.name);
    st.BindText(2, f.description);
-   st.BindText(3, BucketsToJson(f.buckets));
-   st.BindInt (4, f.sort_order);
-   st.BindI64 (5, now);
-   st.BindI64 (6, now);
+   st.BindText(3, PredToJson(f.cash_deposit));
+   st.BindText(4, PredToJson(f.cash_withdrawal));
+   st.BindText(5, PredToJson(f.promotion));
+   st.BindText(6, PredToJson(f.rebate));
+   st.BindInt (7, f.sort_order);
+   st.BindI64 (8, now);
+   st.BindI64 (9, now);
    st.Step();
    f.id = db.LastInsertRowid();
    f.created_at = f.updated_at = now;
@@ -442,14 +434,18 @@ bool DepositFilterRepo::Update(SqliteDb& db, DepositFilter& f)
    std::lock_guard<std::mutex> lock(db.Mutex());
    const int64_t now = (int64_t)time(nullptr);
    SqliteStmt st(db,
-      "UPDATE deposit_filters SET name=?,description=?,buckets_json=?,sort_order=?,"
-      "updated_at=? WHERE id=?");
+      "UPDATE deposit_filters SET name=?,description=?,"
+      "cash_deposit_json=?,cash_withdrawal_json=?,promotion_json=?,rebate_json=?,"
+      "sort_order=?,updated_at=? WHERE id=?");
    st.BindText(1, f.name);
    st.BindText(2, f.description);
-   st.BindText(3, BucketsToJson(f.buckets));
-   st.BindInt (4, f.sort_order);
-   st.BindI64 (5, now);
-   st.BindI64 (6, f.id);
+   st.BindText(3, PredToJson(f.cash_deposit));
+   st.BindText(4, PredToJson(f.cash_withdrawal));
+   st.BindText(5, PredToJson(f.promotion));
+   st.BindText(6, PredToJson(f.rebate));
+   st.BindInt (7, f.sort_order);
+   st.BindI64 (8, now);
+   st.BindI64 (9, f.id);
    st.Step();
    f.updated_at = now;
    return true;

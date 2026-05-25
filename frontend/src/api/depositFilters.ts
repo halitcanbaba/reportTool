@@ -1,9 +1,9 @@
 import { api } from './client';
 import type { DepositFilter, DepositFilterInput, Predicate } from '../types';
 
-//--- Preview payload: lets the editor preview in-flight buckets without
-//--- saving first. Buckets in the body take precedence; the saved filter's
-//--- buckets are not auto-loaded.
+//--- Preview payload: lets the editor preview in-flight predicates without
+//--- saving first. Each of the four fixed slots is optional/nullable; null
+//--- means "no rules for this bucket" — rows are simply untagged for it.
 export type DepositFilterPreviewRequest = {
   manager_id?:        number;
   account_filter_id?: number | null;
@@ -13,7 +13,10 @@ export type DepositFilterPreviewRequest = {
   login_max?:         number | null;
   date_from:          string;
   date_to:            string;
-  buckets:            { key: string; label: string; predicate: Predicate }[];
+  cash_deposit?:      Predicate | null;
+  cash_withdrawal?:   Predicate | null;
+  promotion?:         Predicate | null;
+  rebate?:            Predicate | null;
   offset?:            number;
   limit?:             number;
 };
@@ -25,7 +28,7 @@ export type DepositFilterPreviewRow = {
   action_label:    string;
   profit:          number;
   comment:         string;
-  matched_buckets: string[];
+  matched_buckets: string[];  // standard keys: cash_deposit / cash_withdrawal / promotion / rebate
 };
 
 export type DepositFilterPreviewResult = {
@@ -33,7 +36,7 @@ export type DepositFilterPreviewResult = {
   offset:      number;
   limit:       number;
   rows:        DepositFilterPreviewRow[];
-  buckets:     { key: string; label: string; matched_count: number }[];
+  buckets:     { key: string; matched_count: number }[];
 };
 
 async function previewCsv(input: DepositFilterPreviewRequest): Promise<Blob> {

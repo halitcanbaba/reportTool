@@ -4,7 +4,26 @@ import { DepositFiltersAPI } from '../api/depositFilters';
 import { fmtDateTime } from '../utils/format';
 import { copyName } from '../lib/duplicate';
 import { IconButton, IconFilter, IconEdit, IconDuplicate, IconDelete } from '../components/icons';
-import type { DepositFilter } from '../types';
+import {
+  DEPOSIT_BUCKET_KEYS, DEPOSIT_BUCKET_LABELS,
+  type DepositBucketKey, type DepositFilter,
+} from '../types';
+
+function BucketDot({ on, label }: { on: boolean; label: string }) {
+  return (
+    <span
+      className={
+        'inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-semibold ' +
+        (on
+          ? 'bg-emerald-500 text-white'
+          : 'bg-ink-100 text-ink-400 border border-ink-200')
+      }
+      title={`${label} — ${on ? 'set' : 'empty'}`}
+    >
+      {on ? '✓' : '—'}
+    </span>
+  );
+}
 
 export function DepositFilterListPage() {
   const nav = useNavigate();
@@ -38,15 +57,17 @@ export function DepositFilterListPage() {
     }
   };
 
+  const isSet = (f: DepositFilter, k: DepositBucketKey) => !!f[k];
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-semibold text-ink-900">Deposit Filters</h1>
           <p className="text-sm text-ink-500 mt-1">
-            Per-broker cash-flow presets. Each filter groups deposit/withdrawal/promotion/rebate type deals into
-            named buckets; ready-made reports bind to a preset so the new <span className="font-mono">sum_deposit_amount</span> /
-            <span className="font-mono"> count_deposits</span> aggregators run with broker-specific rules.
+            Per-broker cash-flow presets. Four fixed buckets — bind a ready-made to a preset so
+            <span className="font-mono"> sum_cash_deposit</span> /
+            <span className="font-mono"> count_promotion</span> etc. resolve with that broker's rules.
           </p>
         </div>
         <Link to="/deposit-filters/new" className="btn-primary">+ New deposit filter</Link>
@@ -67,10 +88,15 @@ export function DepositFilterListPage() {
           <table className="min-w-full text-sm">
             <thead className="bg-ink-50 border-b border-ink-100">
               <tr>
-                <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Name</th>
-                <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Buckets</th>
-                <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Description</th>
-                <th className="px-4 py-3 text-left font-medium text-ink-600 uppercase text-xs tracking-wide">Updated</th>
+                <th className="px-4 py-3 text-left  font-medium text-ink-600 uppercase text-xs tracking-wide">Name</th>
+                {DEPOSIT_BUCKET_KEYS.map(k => (
+                  <th key={k} className="px-2 py-3 text-center font-medium text-ink-600 uppercase text-[10px] tracking-wide"
+                      title={DEPOSIT_BUCKET_LABELS[k]}>
+                    {k}
+                  </th>
+                ))}
+                <th className="px-4 py-3 text-left  font-medium text-ink-600 uppercase text-xs tracking-wide">Description</th>
+                <th className="px-4 py-3 text-left  font-medium text-ink-600 uppercase text-xs tracking-wide">Updated</th>
                 <th className="px-4 py-3"></th>
               </tr>
             </thead>
@@ -83,21 +109,11 @@ export function DepositFilterListPage() {
                       <span className="font-medium">{f.name}</span>
                     </span>
                   </td>
-                  <td className="px-4 py-3">
-                    {f.buckets.length === 0 ? (
-                      <span className="text-ink-400 text-xs">—</span>
-                    ) : (
-                      <span className="flex flex-wrap gap-1">
-                        {f.buckets.map(b => (
-                          <span key={b.key}
-                                className="inline-block px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 font-mono text-[11px]"
-                                title={b.label}>
-                            {b.key}
-                          </span>
-                        ))}
-                      </span>
-                    )}
-                  </td>
+                  {DEPOSIT_BUCKET_KEYS.map(k => (
+                    <td key={k} className="px-2 py-3 text-center">
+                      <BucketDot on={isSet(f, k)} label={DEPOSIT_BUCKET_LABELS[k]} />
+                    </td>
+                  ))}
                   <td className="px-4 py-3 text-ink-600">{f.description || <span className="text-ink-400">—</span>}</td>
                   <td className="px-4 py-3 text-xs text-ink-500">{fmtDateTime(f.updated_at)}</td>
                   <td className="px-4 py-3 text-right whitespace-nowrap">

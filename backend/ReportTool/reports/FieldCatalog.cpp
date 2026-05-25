@@ -8,6 +8,7 @@
 #include "Expression.h"
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 #include <set>
 
 using nlohmann::json;
@@ -1013,44 +1014,56 @@ namespace
       Add(std::move(f));
    }
 
-   //--- Deposit-bucket fields (category K). Resolved at run time against
-   //--- ctx.deposit_filter (set by Engine from ready-made's deposit_filter_id)
-   //--- + ctx.active_bucket (set by EvaluateNumeric from ExprField.bucket).
-   //--- agg_mode: 0=sum signed, 1=sum |x|, 2=count rows.
-   void DepositBucketField(const char* name, const char* label,
-                           const char* return_type, int agg_mode)
+   //--- Cash-flow deal actions = everything that affects balance/credit but
+   //--- isn't a trade. Trade deals (DEAL_BUY/SELL and their cancels) are
+   //--- excluded so deposit-bucket aggregators don't accidentally sum
+   //--- trade profits. Kept in sync with DepositFilterRoutes.cpp.
+   const std::unordered_set<uint32_t>& CashFlowActions()
+   {
+      static const std::unordered_set<uint32_t> s = {
+         IMTDeal::DEAL_BALANCE, IMTDeal::DEAL_CREDIT, IMTDeal::DEAL_CHARGE,
+         IMTDeal::DEAL_CORRECTION, IMTDeal::DEAL_BONUS,
+         IMTDeal::DEAL_COMMISSION, IMTDeal::DEAL_COMMISSION_DAILY, IMTDeal::DEAL_COMMISSION_MONTHLY,
+         IMTDeal::DEAL_AGENT, IMTDeal::DEAL_AGENT_DAILY, IMTDeal::DEAL_AGENT_MONTHLY,
+         IMTDeal::DEAL_INTERESTRATE, IMTDeal::DEAL_DIVIDEND, IMTDeal::DEAL_DIVIDEND_FRANKED,
+         IMTDeal::DEAL_TAX,
+         IMTDeal::DEAL_SO_COMPENSATION, IMTDeal::DEAL_SO_COMPENSATION_CREDIT,
+      };
+      return s;
+   }
+
+   //--- Deposit-bucket fields (category K). Each field captures a
+   //--- pointer-to-member into DepositFilter so the evaluator knows
+   //--- which of the four standard predicates to apply. `count_mode`
+   //--- flips between summing profit and counting matched rows.
+   void DepositField(const char* name, const char* label, const char* return_type,
+                     std::shared_ptr<Predicate> DepositFilter::* slot, bool count_mode)
    {
       Field f;
       f.name = name; f.label = label;
       f.category = "K"; f.category_label = "Deposit Filter (preset)";
       f.source = Source::Deal; f.arity = 2;
       f.return_type = return_type;
-      f.supports_predicate = false;     // bucket key IS the per-row filter
-      f.num = [agg_mode](const std::vector<int64_t>& d,
-                        const Predicate* /*up*/,
-                        const EvalContext& ctx) -> double {
-         if(!ctx.deposit_filter)      return 0.0;
-         if(ctx.active_bucket.empty())return 0.0;
-         if(!ctx.deals)               return 0.0;
-         //--- Find the named bucket.
-         const DepositFilterBucket* bucket = nullptr;
-         for(const auto& b : ctx.deposit_filter->buckets)
-            if(b.key == ctx.active_bucket) { bucket = &b; break; }
-         if(!bucket || !bucket->predicate) return 0.0;
-         //--- Inclusive [from, to]; date_args[1] is end-of-day UTC midnight
-         //--- so we extend by one day (matches DealActionSum convention).
-         const int64_t from = d[0];
+      f.supports_predicate = false;
+      f.num = [slot, count_mode](const std::vector<int64_t>& d,
+                                 const Predicate* /*up*/,
+                                 const EvalContext& ctx) -> double {
+         if(!ctx.deposit_filter) return 0.0;
+         const Predicate* p = (ctx.deposit_filter->*slot).get();
+         if(!p)                  return 0.0;
+         if(!ctx.deals)          return 0.0;
+         const int64_t from    = d[0];
          const int64_t to_excl = d[1] + 86400;
+         const auto& cash = CashFlowActions();
          double total = 0.0;
          for(const auto& row : *ctx.deals)
          {
             const int64_t t = (int64_t)row.time;
             if(t < from || t >= to_excl) continue;
-            try { if(!EvalDealPredicate(*bucket->predicate, row)) continue; }
+            if(cash.find(row.action) == cash.end()) continue;
+            try { if(!EvalDealPredicate(*p, row)) continue; }
             catch(...) { continue; }
-            if     (agg_mode == 0) total += row.profit;
-            else if(agg_mode == 1) total += std::fabs(row.profit);
-            else /* count */       total += 1.0;
+            total += count_mode ? 1.0 : row.profit;
          }
          return total;
       };
@@ -1362,14 +1375,18 @@ namespace
       DealActionCnt  ("count_so_compensation_credit", "# DEAL_SO_COMPENSATION_CREDIT rows", IMTDeal::DEAL_SO_COMPENSATION_CREDIT);
       DealActionCnt  ("count_agent",                  "# DEAL_AGENT rows (instant)",        IMTDeal::DEAL_AGENT);
 
-      //--- Deposit Filter (preset) — bucket-aware aggregators. The bucket
-      //--- key is stored on the formula's ExprField at design time; the
-      //--- predicate that backs that bucket comes from the active
-      //--- DepositFilter (ready-made's deposit_filter_id) at run time, so
-      //--- the same template runs with different per-broker conventions.
-      DepositBucketField("sum_deposit_amount", "Σ Deposit amount (bucket)",     "money", 0);
-      DepositBucketField("sum_deposit_abs",    "Σ |Deposit amount| (bucket)",   "money", 1);
-      DepositBucketField("count_deposits",     "# Deposit rows (bucket)",       "int",   2);
+      //--- Deposit Filter (preset) — fixed slot aggregators. Eight fields,
+      //--- one per (bucket, agg) pair. The bound DepositFilter supplies
+      //--- the matching predicate at run time; one template runs across
+      //--- every broker by swapping the ready-made's filter binding.
+      DepositField("sum_cash_deposit",      "Σ Cash deposit",     "money", &DepositFilter::cash_deposit,    false);
+      DepositField("count_cash_deposit",    "# Cash deposit",     "int",   &DepositFilter::cash_deposit,    true);
+      DepositField("sum_cash_withdrawal",   "Σ Cash withdrawal",  "money", &DepositFilter::cash_withdrawal, false);
+      DepositField("count_cash_withdrawal", "# Cash withdrawal",  "int",   &DepositFilter::cash_withdrawal, true);
+      DepositField("sum_promotion",         "Σ Promotion",        "money", &DepositFilter::promotion,       false);
+      DepositField("count_promotion",       "# Promotion",        "int",   &DepositFilter::promotion,       true);
+      DepositField("sum_rebate",            "Σ Rebate",           "money", &DepositFilter::rebate,          false);
+      DepositField("count_rebate",          "# Rebate",           "int",   &DepositFilter::rebate,          true);
 
       //--- Closed-trade sums
       TradeRangeS("sum_closed_pl",   "Σ Closed P/L",      "money", [](const DealRow& d){ return d.profit; });
@@ -1478,7 +1495,6 @@ const Field* FieldCatalog::Lookup(const std::string& name)
 double FieldCatalog::EvaluateNumeric(const std::string& name,
                                      const std::vector<std::string>& args,
                                      const Predicate* predicate,
-                                     const std::string& bucket,
                                      const EvalContext& ctx)
 {
    const Field* f = Lookup(name);
@@ -1498,12 +1514,7 @@ double FieldCatalog::EvaluateNumeric(const std::string& name,
          throw std::runtime_error("date param '" + a + "' not bound for field " + name);
       resolved.push_back(it->second);
    }
-   //--- Stash bucket on the (mutable) ctx so deposit-bucket lambdas can read
-   //--- it without changing the Field::num signature for every other field.
-   ctx.active_bucket = bucket;
-   const double v = f->num(resolved, predicate, ctx);
-   ctx.active_bucket.clear();
-   return v;
+   return f->num(resolved, predicate, ctx);
 }
 
 std::string FieldCatalog::EvaluateText(const std::string& name, const EvalContext& ctx)

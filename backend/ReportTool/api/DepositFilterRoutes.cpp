@@ -68,27 +68,55 @@ namespace
       }
    }
 
+   //--- The four canonical bucket slots. The frontend, schema, and
+   //--- FieldCatalog all agree on these exact names so a chip referencing
+   //--- "sum_cash_deposit" lines up with the JSON key parsed here.
+   constexpr const char* kBucketKeys[] = {
+      "cash_deposit", "cash_withdrawal", "promotion", "rebate",
+   };
+
+   json PredField(const std::shared_ptr<Predicate>& p)
+   {
+      return p ? Expression::PredicateToJson(*p) : json(nullptr);
+   }
+
    json ToJson(const DepositFilter& f)
    {
-      json buckets = json::array();
-      for(const auto& b : f.buckets)
-      {
-         json bj{
-            { "key",   b.key },
-            { "label", b.label },
-         };
-         bj["predicate"] = b.predicate ? Expression::PredicateToJson(*b.predicate) : json(nullptr);
-         buckets.push_back(std::move(bj));
-      }
       return json{
-         { "id",          f.id },
-         { "name",        f.name },
-         { "description", f.description },
-         { "buckets",     buckets },
-         { "sort_order",  f.sort_order },
-         { "created_at",  f.created_at },
-         { "updated_at",  f.updated_at },
+         { "id",              f.id },
+         { "name",            f.name },
+         { "description",     f.description },
+         { "cash_deposit",    PredField(f.cash_deposit) },
+         { "cash_withdrawal", PredField(f.cash_withdrawal) },
+         { "promotion",       PredField(f.promotion) },
+         { "rebate",          PredField(f.rebate) },
+         { "sort_order",      f.sort_order },
+         { "created_at",      f.created_at },
+         { "updated_at",      f.updated_at },
       };
+   }
+
+   //--- Parse one named slot. Each may be omitted or null; predicates are
+   //--- validated against the deal source. Empty slot is OK — the matching
+   //--- aggregator field returns 0 at run time.
+   bool ParseSlot(const json& j, const char* key,
+                  std::shared_ptr<Predicate>* out, std::string* err)
+   {
+      out->reset();
+      if(!j.contains(key) || j[key].is_null()) return true;
+      if(!Expression::PredicateFromJson(j[key], out, err))
+      {
+         *err = std::string(key) + ": " + *err;
+         return false;
+      }
+      auto errs = FieldCatalog::ValidatePredicateStandalone(**out, FieldCatalog::Source::Deal);
+      if(!errs.empty())
+      {
+         *err = std::string(key) + " predicate invalid: "
+                + errs[0].path + ": " + errs[0].message;
+         return false;
+      }
+      return true;
    }
 
    bool FromJson(const json& j, DepositFilter* f, std::string* err)
@@ -98,37 +126,10 @@ namespace
          f->name        = j.value("name", "");
          f->description = j.value("description", "");
          if(f->name.empty()) { *err = "name is required"; return false; }
-         f->buckets.clear();
-         if(j.contains("buckets") && j["buckets"].is_array())
-         {
-            std::unordered_set<std::string> seen_keys;
-            for(const auto& bj : j["buckets"])
-            {
-               if(!bj.is_object()) { *err = "bucket must be an object"; return false; }
-               DepositFilterBucket b;
-               b.key   = bj.value("key", "");
-               b.label = bj.value("label", "");
-               if(b.key.empty())   { *err = "bucket.key is required"; return false; }
-               if(b.label.empty()) b.label = b.key;
-               if(!seen_keys.insert(b.key).second)
-               { *err = "duplicate bucket key: " + b.key; return false; }
-               if(bj.contains("predicate") && !bj["predicate"].is_null())
-               {
-                  if(!Expression::PredicateFromJson(bj["predicate"], &b.predicate, err))
-                     return false;
-                  auto errs = FieldCatalog::ValidatePredicateStandalone(*b.predicate, FieldCatalog::Source::Deal);
-                  if(!errs.empty())
-                  {
-                     *err = "bucket '" + b.key + "' predicate invalid: "
-                            + errs[0].path + ": " + errs[0].message;
-                     return false;
-                  }
-               }
-               if(!b.predicate) { *err = "bucket '" + b.key + "' predicate is required"; return false; }
-               f->buckets.push_back(std::move(b));
-            }
-         }
-         if(f->buckets.empty()) { *err = "at least one bucket is required"; return false; }
+         if(!ParseSlot(j, "cash_deposit",    &f->cash_deposit,    err)) return false;
+         if(!ParseSlot(j, "cash_withdrawal", &f->cash_withdrawal, err)) return false;
+         if(!ParseSlot(j, "promotion",       &f->promotion,       err)) return false;
+         if(!ParseSlot(j, "rebate",          &f->rebate,          err)) return false;
       }
       catch(const std::exception& e) { *err = e.what(); return false; }
       return true;
@@ -231,35 +232,39 @@ namespace
       std::vector<std::string> matched_buckets;
    };
 
-   //--- Parse the buckets array from the body — preview can be driven by
-   //--- in-flight buckets that haven't been saved yet (during edit).
-   //--- Returns empty vector when body has no buckets.
-   std::vector<DepositFilterBucket> ParseBucketsFromBody(const json& body, std::string* err)
+   //--- Four in-flight predicates parsed from the preview body — lets the
+   //--- editor preview its current rules without saving first. Each may be
+   //--- null when that bucket has no predicate yet.
+   struct PreviewPredicates {
+      std::shared_ptr<Predicate> cash_deposit;
+      std::shared_ptr<Predicate> cash_withdrawal;
+      std::shared_ptr<Predicate> promotion;
+      std::shared_ptr<Predicate> rebate;
+   };
+
+   PreviewPredicates ParsePredicatesFromBody(const json& body)
    {
-      std::vector<DepositFilterBucket> out;
-      if(!body.contains("buckets") || !body["buckets"].is_array()) return out;
-      for(const auto& bj : body["buckets"])
-      {
-         if(!bj.is_object()) continue;
-         DepositFilterBucket b;
-         b.key   = bj.value("key", "");
-         b.label = bj.value("label", b.key);
-         if(b.key.empty()) continue;
-         if(bj.contains("predicate") && !bj["predicate"].is_null())
-            Expression::PredicateFromJson(bj["predicate"], &b.predicate, err);
-         if(b.predicate) out.push_back(std::move(b));
-      }
+      PreviewPredicates out;
+      auto take = [&](const char* key, std::shared_ptr<Predicate>* dst) {
+         if(!body.contains(key) || body[key].is_null()) return;
+         std::string err;
+         Expression::PredicateFromJson(body[key], dst, &err);
+      };
+      take("cash_deposit",    &out.cash_deposit);
+      take("cash_withdrawal", &out.cash_withdrawal);
+      take("promotion",       &out.promotion);
+      take("rebate",          &out.rebate);
       return out;
    }
 
    bool LoadAndTagDeals(AppContext& ctx, const PreviewSpec& spec,
-                        const std::vector<DepositFilterBucket>& buckets,
+                        const PreviewPredicates& pp,
                         httplib::Response& res,
                         std::vector<DealRowOut>* out_rows,
                         std::unordered_map<std::string, int64_t>* out_counts)
    {
       out_rows->clear();
-      for(const auto& b : buckets) (*out_counts)[b.key] = 0;
+      for(const char* key : kBucketKeys) (*out_counts)[key] = 0;
       if(spec.logins.empty()) return true;
 
       auto conn = ctx.pool->GetOrConnect(spec.mgr);
@@ -277,20 +282,28 @@ namespace
       }
 
       const auto& cash = CashFlowActions();
+      struct Slot { const char* key; const Predicate* p; };
+      const Slot slots[] = {
+         { "cash_deposit",    pp.cash_deposit.get() },
+         { "cash_withdrawal", pp.cash_withdrawal.get() },
+         { "promotion",       pp.promotion.get() },
+         { "rebate",          pp.rebate.get() },
+      };
       for(auto& kv : by_login)
       {
          for(auto& d : kv.second)
          {
             if(cash.find(d.action) == cash.end()) continue;
             DealRowOut r{ (int64_t)d.time, d.login, d.action, d.profit, d.comment, {} };
-            for(const auto& b : buckets)
+            for(const auto& s : slots)
             {
+               if(!s.p) continue;
                bool m = false;
-               try { m = FieldCatalog::EvalDealPredicate(*b.predicate, d); }
+               try { m = FieldCatalog::EvalDealPredicate(*s.p, d); }
                catch(...) { m = false; }
                if(m) {
-                  r.matched_buckets.push_back(b.key);
-                  ++(*out_counts)[b.key];
+                  r.matched_buckets.push_back(s.key);
+                  ++(*out_counts)[s.key];
                }
             }
             out_rows->push_back(std::move(r));
@@ -348,20 +361,19 @@ void DepositFilterRoutes::Register(httplib::Server& srv, AppContext* ctx)
    });
 
    //--- Preview: cash-flow deals in (account filter, date range) tagged
-   //--- with every bucket whose predicate matches. Buckets are passed in
-   //--- the body (in-flight edit), not loaded from a saved filter, so the
-   //--- editor's "live preview" works without saving first.
+   //--- with every standard bucket whose in-flight predicate matches. The
+   //--- four predicates ride in the body so the editor can preview without
+   //--- saving the filter first.
    srv.Post("/api/deposit-filters/preview", [ctx](const httplib::Request& req, httplib::Response& res){
       json body = json::parse(req.body, nullptr, false);
       if(body.is_discarded()) { SendError(res, 400, "invalid json"); return; }
       PreviewSpec spec;
       if(!ResolvePreviewSpec(*ctx, body, res, &spec)) return;
-      std::string perr;
-      auto buckets = ParseBucketsFromBody(body, &perr);
+      auto pp = ParsePredicatesFromBody(body);
 
       std::vector<DealRowOut> all;
       std::unordered_map<std::string, int64_t> per_bucket;
-      if(!LoadAndTagDeals(*ctx, spec, buckets, res, &all, &per_bucket)) return;
+      if(!LoadAndTagDeals(*ctx, spec, pp, res, &all, &per_bucket)) return;
 
       const size_t total = all.size();
       const size_t offset = std::min<size_t>(spec.offset, total);
@@ -380,11 +392,13 @@ void DepositFilterRoutes::Register(httplib::Server& srv, AppContext* ctx)
             { "matched_buckets", mb },
          });
       }
+      //--- Per-bucket count strip always emits the four standard keys so
+      //--- the UI can show them in a stable order regardless of whether
+      //--- the editor has filled all four predicates yet.
       json bucket_summary = json::array();
-      for(const auto& b : buckets)
+      for(const char* key : kBucketKeys)
          bucket_summary.push_back(json{
-            { "key", b.key }, { "label", b.label },
-            { "matched_count", per_bucket[b.key] },
+            { "key", key }, { "matched_count", per_bucket[key] },
          });
 
       res.set_content(json{
@@ -401,12 +415,11 @@ void DepositFilterRoutes::Register(httplib::Server& srv, AppContext* ctx)
       if(body.is_discarded()) { SendError(res, 400, "invalid json"); return; }
       PreviewSpec spec;
       if(!ResolvePreviewSpec(*ctx, body, res, &spec)) return;
-      std::string perr;
-      auto buckets = ParseBucketsFromBody(body, &perr);
+      auto pp = ParsePredicatesFromBody(body);
 
       std::vector<DealRowOut> all;
       std::unordered_map<std::string, int64_t> per_bucket;
-      if(!LoadAndTagDeals(*ctx, spec, buckets, res, &all, &per_bucket)) return;
+      if(!LoadAndTagDeals(*ctx, spec, pp, res, &all, &per_bucket)) return;
 
       auto esc = [](const std::string& s) {
          bool needs = s.find_first_of(",\"\r\n") != std::string::npos;

@@ -35,17 +35,12 @@ struct EvalContext
    const CompiledFilters*                filters     = nullptr;  // deal bucket regex
 
    //--- Active DepositFilter for the current run (from ready-made's
-   //--- deposit_filter_id or per-run override). New aggregator fields
-   //--- sum_deposit_amount / count_deposits / sum_deposit_abs look up
-   //--- the chosen bucket here. Null when the run has no deposit_filter
-   //--- — those fields then return 0.
+   //--- deposit_filter_id or per-run override). The eight hardcoded
+   //--- sum_cash_deposit / count_promotion / etc. fields each capture a
+   //--- pointer-to-member into this struct and read their predicate from
+   //--- it. Null when the run has no deposit_filter bound — those fields
+   //--- then return 0.
    const DepositFilter*                  deposit_filter = nullptr;
-
-   //--- Per-call bucket key (mutable so EvaluateNumeric can populate it
-   //--- without requiring all 60+ existing field lambdas to change their
-   //--- signature). Set right before f->num(...) is called, cleared right
-   //--- after. Deposit-bucket fields read this; everyone else ignores it.
-   mutable std::string                   active_bucket;
 
    //--- Per-row cache of previously evaluated columns (key → numeric value).
    //--- Populated by Engine left-to-right; ExprNode::ColRef looks up here.

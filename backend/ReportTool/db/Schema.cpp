@@ -3,7 +3,7 @@
 
 namespace
 {
-   constexpr int kCurrentSchemaVersion = 15;
+   constexpr int kCurrentSchemaVersion = 16;
 
    //--- Tables that survive every version (managers, regex_filters,
    //--- daily_cache, deal_cache). These are idempotent.
@@ -447,6 +447,36 @@ namespace
          return false;
       return WriteVersion(db, 15, err);
    }
+
+   //--- v15 → v16: collapse arbitrary multi-bucket presets to a fixed set of
+   //--- four standard cash-flow categories: cash_deposit, cash_withdrawal,
+   //--- promotion, rebate. Each filter now stores four predicate_json
+   //--- columns (one per bucket) instead of a buckets_json array. The
+   //--- frontend FieldPicker exposes exactly eight aggregator fields
+   //--- (sum/count × 4); one template runs across every broker by binding
+   //--- ready-made reports to different DepositFilters. Drop+recreate since
+   //--- v15 shipped without production users.
+   const char* kV16Tables = R"SQL(
+      DROP TABLE IF EXISTS deposit_filters;
+      CREATE TABLE IF NOT EXISTS deposit_filters (
+         id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+         name                  TEXT NOT NULL UNIQUE,
+         description           TEXT NOT NULL DEFAULT '',
+         cash_deposit_json     TEXT NOT NULL DEFAULT '',
+         cash_withdrawal_json  TEXT NOT NULL DEFAULT '',
+         promotion_json        TEXT NOT NULL DEFAULT '',
+         rebate_json           TEXT NOT NULL DEFAULT '',
+         sort_order            INTEGER NOT NULL DEFAULT 0,
+         created_at            INTEGER NOT NULL,
+         updated_at            INTEGER NOT NULL
+      );
+   )SQL";
+
+   bool MigrateToV16(SqliteDb& db, std::string* err)
+   {
+      if(!db.Exec(kV16Tables, err)) return false;
+      return WriteVersion(db, 16, err);
+   }
 }
 
 bool Schema::Apply(SqliteDb& db, std::string* err)
@@ -496,8 +526,10 @@ bool Schema::Apply(SqliteDb& db, std::string* err)
          }
       }
       //--- v14: deal_filters (replaced in v15) — skip on fresh install.
-      //--- v15: deposit_filters table + ready_made_reports.deposit_filter_id.
-      if(!db.Exec(kV15Tables, err)) return false;
+      //--- v15: deposit_filters multi-bucket (replaced in v16) — also skip.
+      //--- v16: deposit_filters with four named predicate columns; ALTER
+      //---      ready_made_reports.deposit_filter_id (from v15).
+      if(!db.Exec(kV16Tables, err)) return false;
       if(!db.Exec(
          "ALTER TABLE ready_made_reports ADD COLUMN deposit_filter_id INTEGER NULL "
          "REFERENCES deposit_filters(id) ON DELETE SET NULL", err)) return false;
@@ -558,6 +590,10 @@ bool Schema::Apply(SqliteDb& db, std::string* err)
    if(v < 15)
    {
       if(!MigrateToV15(db, err)) return false;
+   }
+   if(v < 16)
+   {
+      if(!MigrateToV16(db, err)) return false;
    }
    //--- v >= current: no-op.
    return true;

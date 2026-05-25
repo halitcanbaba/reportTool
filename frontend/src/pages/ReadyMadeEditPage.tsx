@@ -144,13 +144,16 @@ export function ReadyMadeEditPage() {
             <select className="input" value={form.deposit_filter_id ?? ''}
                     onChange={e => update('deposit_filter_id', e.target.value ? Number(e.target.value) : null)}>
               <option value="">— none —</option>
-              {depositFilters.map(f => (
-                <option key={f.id} value={f.id}>{f.name} ({f.buckets.length} bucket{f.buckets.length === 1 ? '' : 's'})</option>
-              ))}
+              {depositFilters.map(f => {
+                const n = [f.cash_deposit, f.cash_withdrawal, f.promotion, f.rebate].filter(Boolean).length;
+                return (
+                  <option key={f.id} value={f.id}>{f.name} ({n}/4 buckets set)</option>
+                );
+              })}
             </select>
             <div className="text-xs text-ink-500 mt-1">
-              Required for templates that use <span className="font-mono">sum_deposit_amount</span> /
-              <span className="font-mono"> count_deposits</span> fields; otherwise those return 0.
+              Required for templates that use the eight <span className="font-mono">sum_…</span> /
+              <span className="font-mono"> count_…</span> deposit-bucket fields; otherwise those return 0.
             </div>
           </div>
         </div>

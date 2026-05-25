@@ -107,13 +107,16 @@ export function RunReportPage() {
           <select className="input" value={depositFilterId ?? ''}
                   onChange={e => setDepositFilterId(e.target.value ? Number(e.target.value) : null)}>
             <option value="">— none —</option>
-            {depositFilters.map(f => (
-              <option key={f.id} value={f.id}>{f.name} ({f.buckets.length} bucket{f.buckets.length === 1 ? '' : 's'})</option>
-            ))}
+            {depositFilters.map(f => {
+              const n = [f.cash_deposit, f.cash_withdrawal, f.promotion, f.rebate].filter(Boolean).length;
+              return (
+                <option key={f.id} value={f.id}>{f.name} ({n}/4 buckets set)</option>
+              );
+            })}
           </select>
           <div className="text-xs text-ink-500 mt-1">
-            Required for templates that reference <span className="font-mono">sum_deposit_amount</span> /
-            <span className="font-mono"> count_deposits</span>.
+            Required for templates that reference the <span className="font-mono">sum_cash_deposit</span> /
+            <span className="font-mono"> count_promotion</span> family.
           </div>
         </div>
 

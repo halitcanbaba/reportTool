@@ -70,27 +70,36 @@ export type AccountFilter = {
 
 export type AccountFilterInput = Omit<AccountFilter, 'id' | 'created_at' | 'updated_at'>;
 
-//--- DepositFilter — multi-bucket cash-flow classifier preset. Each bucket
-//--- is a named Predicate over the 'deal' source ("cash_deposit",
-//--- "promotion", "rebate", …). Ready-made reports bind to a DepositFilter
-//--- by id; templates reference bucket keys in the new sum_deposit_amount
-//--- / count_deposits / sum_deposit_abs aggregator fields. Same template
-//--- runs with different per-broker conventions by swapping the binding.
-export type DepositFilterBucket = {
-  key:       string;
-  label:     string;
-  predicate: Predicate;
-};
+//--- DepositFilter — broker-specific cash-flow classifier with four fixed
+//--- predicate slots. The template references the hardcoded aggregator
+//--- fields (sum_cash_deposit, count_promotion, …); ready-made reports
+//--- bind to a DepositFilter so the engine picks each predicate at run
+//--- time. Result: one template runs across every broker — only the
+//--- predicates change. Any slot may be null when the broker doesn't
+//--- distinguish that category; the matching field then returns 0.
 export type DepositFilter = {
   id: number;
   name: string;
   description: string;
-  buckets: DepositFilterBucket[];
+  cash_deposit:    Predicate | null;
+  cash_withdrawal: Predicate | null;
+  promotion:       Predicate | null;
+  rebate:          Predicate | null;
   sort_order?: number;
   created_at: number;
   updated_at: number;
 };
 export type DepositFilterInput = Omit<DepositFilter, 'id' | 'created_at' | 'updated_at'>;
+//--- The four canonical bucket keys — kept in sync with the backend's
+//--- kBucketKeys and the eight K-category aggregator fields.
+export const DEPOSIT_BUCKET_KEYS = ['cash_deposit', 'cash_withdrawal', 'promotion', 'rebate'] as const;
+export type DepositBucketKey = typeof DEPOSIT_BUCKET_KEYS[number];
+export const DEPOSIT_BUCKET_LABELS: Record<DepositBucketKey, string> = {
+  cash_deposit:    'Cash deposit',
+  cash_withdrawal: 'Cash withdrawal',
+  promotion:       'Promotion',
+  rebate:          'Rebate',
+};
 
 //--- Organisational folders shared across the five user-content entities.
 
@@ -131,11 +140,7 @@ export type Predicate = PredCmp | PredAnd | PredOr | PredNot;
 //--- Expression AST ----------------------------------------------
 
 export type ExprLiteral = { type: 'literal'; value: number };
-//--- `bucket` is the key of a DepositFilterBucket; only set on deposit-bucket
-//--- fields (sum_deposit_amount / count_deposits / sum_deposit_abs). At run
-//--- time the engine resolves the bucket against the active DepositFilter
-//--- on the ready-made / job.
-export type ExprField   = { type: 'field';   name: string; args: string[]; predicate?: Predicate; bucket?: string };
+export type ExprField   = { type: 'field';   name: string; args: string[]; predicate?: Predicate };
 export type ExprBinOp   = { type: 'binop';   op: '+' | '-' | '*' | '/'; left: ExprNode; right: ExprNode };
 export type ExprColRef  = { type: 'col_ref'; key: string };
 export type ExprNode    = ExprLiteral | ExprField | ExprBinOp | ExprColRef;
@@ -165,12 +170,6 @@ export type FieldDef = {
   is_identifier:      boolean;
   supports_predicate: boolean;
   description?:       string;
-  //--- Synthetic-only: when set, indicates this FieldDef is a per-bucket
-  //--- virtual entry expanded from a saved DepositFilter. makeFieldChip
-  //--- copies this onto ExprField.bucket so the chip is ready to drop with
-  //--- the bucket pre-selected. Never present on real backend-registered
-  //--- fields.
-  default_bucket?:    string;
 };
 
 export type FilterValueType = 'num' | 'text' | 'enum';

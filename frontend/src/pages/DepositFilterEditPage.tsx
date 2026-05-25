@@ -5,56 +5,53 @@ import { FieldsAPI } from '../api/fields';
 import { PredicateEditor } from '../components/PredicateEditor';
 import { DepositFilterPreview } from '../components/DepositFilterPreview';
 import { Breadcrumbs } from '../components/Breadcrumbs';
-import type { DepositFilter, DepositFilterBucket, FieldCatalog, Predicate } from '../types';
+import {
+  DEPOSIT_BUCKET_KEYS, DEPOSIT_BUCKET_LABELS,
+  type DepositBucketKey, type DepositFilter, type FieldCatalog, type Predicate,
+} from '../types';
 
-//--- One bucket card: key + label inputs + PredicateEditor + remove button.
-function BucketCard({
-  index, bucket, dealFilterable, onChange, onRemove,
+//--- All four predicates the editor manages, keyed by canonical bucket name.
+type SlotMap = Record<DepositBucketKey, Predicate | null>;
+
+const EMPTY_SLOTS: SlotMap = {
+  cash_deposit:    null,
+  cash_withdrawal: null,
+  promotion:       null,
+  rebate:          null,
+};
+
+function BucketSection({
+  bucketKey, predicate, filterable, onChange,
 }: {
-  index: number;
-  bucket: DepositFilterBucket;
-  dealFilterable: FieldCatalog['filterable_by_source'] extends infer T ? any : never;
-  onChange: (b: DepositFilterBucket) => void;
-  onRemove: () => void;
+  bucketKey:  DepositBucketKey;
+  predicate:  Predicate | null;
+  filterable: FieldCatalog['filterable_by_source'] extends infer T ? any : never;
+  onChange:   (next: Predicate | null) => void;
 }) {
+  const label = DEPOSIT_BUCKET_LABELS[bucketKey];
   return (
-    <div className="border border-ink-200 rounded p-4 space-y-3 bg-white">
-      <div className="flex items-center gap-3 flex-wrap">
-        <div className="text-xs text-ink-400 font-mono">#{index + 1}</div>
-        <div className="flex-1 min-w-[160px]">
-          <label className="label">Key (machine name)</label>
-          <input
-            className="input"
-            value={bucket.key}
-            onChange={e => onChange({ ...bucket, key: e.target.value.replace(/\s+/g, '_').toLowerCase() })}
-            placeholder="cash_deposit"
-          />
+    <div className="card p-5 space-y-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="text-sm font-semibold text-ink-700 uppercase tracking-wide">{label}</div>
+          <div className="text-[11px] font-mono text-ink-400">{bucketKey}</div>
         </div>
-        <div className="flex-1 min-w-[160px]">
-          <label className="label">Label (display)</label>
-          <input
-            className="input"
-            value={bucket.label}
-            onChange={e => onChange({ ...bucket, label: e.target.value })}
-            placeholder="Cash Deposit"
-          />
-        </div>
-        <button type="button" onClick={onRemove}
-                className="btn-secondary text-xs text-red-600 self-end">
-          × Remove
-        </button>
+        {predicate ? (
+          <span className="inline-block px-2 py-0.5 text-[10px] font-semibold bg-emerald-600 text-white rounded">
+            predicate set
+          </span>
+        ) : (
+          <span className="inline-block px-2 py-0.5 text-[10px] font-semibold bg-ink-100 text-ink-500 rounded">
+            empty — field returns 0
+          </span>
+        )}
       </div>
-      <div>
-        <div className="text-[11px] text-ink-500 mb-1 uppercase tracking-wide font-medium">
-          Predicate over deal source
-        </div>
-        <PredicateEditor
-          source="deal"
-          filterable={dealFilterable}
-          predicate={bucket.predicate ?? null}
-          onChange={p => onChange({ ...bucket, predicate: p ?? bucket.predicate })}
-        />
-      </div>
+      <PredicateEditor
+        source="deal"
+        filterable={filterable}
+        predicate={predicate}
+        onChange={onChange}
+      />
     </div>
   );
 }
@@ -67,7 +64,7 @@ export function DepositFilterEditPage() {
   const [catalog, setCatalog] = useState<FieldCatalog | null>(null);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [buckets, setBuckets] = useState<DepositFilterBucket[]>([]);
+  const [slots, setSlots] = useState<SlotMap>(EMPTY_SLOTS);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -81,43 +78,29 @@ export function DepositFilterEditPage() {
     DepositFiltersAPI.get(Number(id)).then((f: DepositFilter) => {
       setName(f.name);
       setDescription(f.description);
-      setBuckets(f.buckets ?? []);
+      setSlots({
+        cash_deposit:    f.cash_deposit    ?? null,
+        cash_withdrawal: f.cash_withdrawal ?? null,
+        promotion:       f.promotion       ?? null,
+        rebate:          f.rebate          ?? null,
+      });
     }).catch(e => setError(e.message ?? 'failed to load'));
   }, [editing, id]);
 
-  const addBucket = () => {
-    const n = buckets.length + 1;
-    //--- Default predicate: a sane "always-false" starter so the user can
-    //--- immediately edit it; backend rejects buckets with null predicate
-    //--- so we never persist this placeholder.
-    const placeholder: Predicate = {
-      kind: 'cmp', field: 'action', op: 'eq', value: 0,
-    };
-    setBuckets([
-      ...buckets,
-      { key: `bucket_${n}`, label: `Bucket ${n}`, predicate: placeholder },
-    ]);
-  };
-
-  const setBucket = (idx: number, b: DepositFilterBucket) =>
-    setBuckets(prev => prev.map((x, i) => i === idx ? b : x));
-
-  const removeBucket = (idx: number) =>
-    setBuckets(prev => prev.filter((_, i) => i !== idx));
+  const setSlot = (key: DepositBucketKey, p: Predicate | null) =>
+    setSlots(prev => ({ ...prev, [key]: p }));
 
   const onSave = async () => {
     if (!name.trim()) { setError('Name is required.'); return; }
-    if (buckets.length === 0) { setError('Add at least one bucket.'); return; }
-    const keys = new Set<string>();
-    for (const b of buckets) {
-      if (!b.key.trim())  { setError('Every bucket needs a key.'); return; }
-      if (keys.has(b.key)) { setError(`Duplicate bucket key: ${b.key}`); return; }
-      keys.add(b.key);
-      if (!b.predicate)   { setError(`Bucket "${b.key}" needs a predicate.`); return; }
-    }
     setBusy(true); setError(null);
     try {
-      const payload = { name, description, buckets };
+      const payload = {
+        name, description,
+        cash_deposit:    slots.cash_deposit,
+        cash_withdrawal: slots.cash_withdrawal,
+        promotion:       slots.promotion,
+        rebate:          slots.rebate,
+      };
       if (editing) await DepositFiltersAPI.update(Number(id), payload);
       else         await DepositFiltersAPI.create(payload);
       nav('/deposit-filters');
@@ -142,9 +125,11 @@ export function DepositFilterEditPage() {
           {editing ? `Edit ${name || `Deposit filter #${id}`}` : 'New deposit filter'}
         </h1>
         <p className="text-sm text-ink-500 mt-1">
-          Define one bucket per cash-flow category for this broker (cash deposit, promotion, rebate, …).
-          Bind this preset to a ready-made report so <span className="font-mono">sum_deposit_amount</span> /
-          <span className="font-mono"> count_deposits</span> aggregator fields can resolve bucket keys at run time.
+          Define one predicate per standard cash-flow category for this broker. The four buckets are fixed
+          (<span className="font-mono">cash_deposit</span>, <span className="font-mono">cash_withdrawal</span>,
+          <span className="font-mono"> promotion</span>, <span className="font-mono">rebate</span>);
+          templates use the matching <span className="font-mono">sum_…</span> / <span className="font-mono">count_…</span>
+          fields and the engine picks each predicate from the ready-made's bound DepositFilter at run time.
         </p>
       </div>
 
@@ -165,36 +150,23 @@ export function DepositFilterEditPage() {
         </div>
       </div>
 
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="text-sm font-semibold text-ink-700 uppercase tracking-wide">Buckets</div>
-          <button type="button" className="btn-secondary text-sm" onClick={addBucket}>+ Add bucket</button>
-        </div>
-        {buckets.length === 0 && (
-          <div className="card p-8 text-center text-ink-400 text-sm">
-            No buckets yet. Add at least one — each bucket gives the new <span className="font-mono">sum_deposit_amount(bucket, …)</span>
-            field one rule to resolve.
-          </div>
-        )}
-        {buckets.map((b, i) => (
-          <BucketCard
-            key={i}
-            index={i}
-            bucket={b}
-            dealFilterable={dealFilterable}
-            onChange={nb => setBucket(i, nb)}
-            onRemove={() => removeBucket(i)}
-          />
-        ))}
-      </div>
+      {DEPOSIT_BUCKET_KEYS.map(key => (
+        <BucketSection
+          key={key}
+          bucketKey={key}
+          predicate={slots[key]}
+          filterable={dealFilterable}
+          onChange={p => setSlot(key, p)}
+        />
+      ))}
 
       <div className="card p-5 space-y-3">
         <div className="text-sm font-semibold text-ink-700 uppercase tracking-wide">Preview</div>
         <p className="text-xs text-ink-500">
           Pick a manager + (optional) account filter + date range, then click "Preview matches". Every cash-flow
-          deal in the window is tagged with the bucket key(s) whose predicate matched.
+          deal in the window is tagged with the bucket(s) whose predicate matched.
         </p>
-        <DepositFilterPreview buckets={buckets} />
+        <DepositFilterPreview slots={slots} />
       </div>
 
       <div className="flex justify-end gap-2">
@@ -202,7 +174,7 @@ export function DepositFilterEditPage() {
           Cancel
         </button>
         <button type="button" className="btn-primary" onClick={onSave}
-                disabled={busy || !name.trim() || buckets.length === 0}>
+                disabled={busy || !name.trim()}>
           {busy ? 'Saving…' : editing ? 'Save changes' : 'Create deposit filter'}
         </button>
       </div>

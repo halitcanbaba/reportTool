@@ -15,7 +15,7 @@ double Expression::Evaluate(const ExprNode& n, const EvalContext& ctx)
       case ExprNode::Type::Literal:
          return n.literal_value;
       case ExprNode::Type::Field:
-         return FieldCatalog::EvaluateNumeric(n.field_name, n.field_args, n.predicate.get(), n.bucket, ctx);
+         return FieldCatalog::EvaluateNumeric(n.field_name, n.field_args, n.predicate.get(), ctx);
       case ExprNode::Type::BinOp:
       {
          const double l = n.left  ? Evaluate(*n.left,  ctx) : 0.0;
@@ -200,8 +200,7 @@ json Expression::NodeToJson(const ExprNode& n)
          j["type"] = "field";
          j["name"] = n.field_name;
          j["args"] = n.field_args;
-         if(n.predicate)     j["predicate"] = PredicateToJson(*n.predicate);
-         if(!n.bucket.empty()) j["bucket"]  = n.bucket;
+         if(n.predicate) j["predicate"] = PredicateToJson(*n.predicate);
          break;
       case ExprNode::Type::BinOp:
       {
@@ -249,8 +248,6 @@ bool Expression::NodeFromJson(const json& j,
       {
          if(!PredicateFromJson(j["predicate"], &node->predicate, err)) return false;
       }
-      if(j.contains("bucket") && j["bucket"].is_string())
-         node->bucket = j["bucket"].get<std::string>();
    }
    else if(t == "binop")
    {

@@ -4,15 +4,22 @@ import { ManagersAPI } from '../api/managers';
 import { AccountFilterPicker } from './AccountFilterPicker';
 import { fmtInt, fmtNumber, fmtDateTime } from '../utils/format';
 import { todayLocal, todayLocalMinus } from '../utils/format';
-import type { DepositFilterBucket, Manager } from '../types';
+import {
+  DEPOSIT_BUCKET_KEYS, DEPOSIT_BUCKET_LABELS,
+  type DepositBucketKey, type Manager, type Predicate,
+} from '../types';
+
+type SlotMap = Record<DepositBucketKey, Predicate | null>;
 
 type Props = {
-  buckets: DepositFilterBucket[];   // the in-flight buckets being designed; rows tagged with each one that matches
+  //--- The four in-flight predicates being designed; the preview tags each
+  //--- cash-flow deal with whichever bucket's rule matched.
+  slots: SlotMap;
 };
 
 const PAGE_SIZE = 50;
 
-export function DepositFilterPreview({ buckets }: Props) {
+export function DepositFilterPreview({ slots }: Props) {
   const [managers, setManagers] = useState<Manager[]>([]);
   const [managerId, setManagerId] = useState<number | null>(null);
   const [accountFilterId, setAccountFilterId] = useState<number | null>(null);
@@ -23,20 +30,20 @@ export function DepositFilterPreview({ buckets }: Props) {
   const [csvLoading, setCsvLoading] = useState(false);
   const [error, setError]           = useState<string | null>(null);
   const [result, setResult]         = useState<DepositFilterPreviewResult | null>(null);
-  const [activeSpec, setActiveSpec] = useState<Omit<DepositFilterPreviewRequest, 'buckets' | 'offset' | 'limit'> | null>(null);
+  const [activeSpec, setActiveSpec] = useState<Omit<DepositFilterPreviewRequest, keyof SlotMap | 'offset' | 'limit'> | null>(null);
   const [page, setPage]             = useState(1);
 
   useEffect(() => {
     ManagersAPI.list().then(setManagers).catch(() => {});
   }, []);
 
-  //--- Re-fetch when buckets change (user edited a rule) so matched chips
-  //--- update live without a manual "Preview matches" click.
+  //--- Live re-fetch when predicates change so badges follow the user's
+  //--- edits without re-clicking Preview.
   useEffect(() => {
     if (!activeSpec) return;
     const spec: DepositFilterPreviewRequest = {
       ...activeSpec,
-      buckets: buckets.map(b => ({ key: b.key, label: b.label, predicate: b.predicate })),
+      ...slots,
       offset: (page - 1) * PAGE_SIZE,
       limit:  PAGE_SIZE,
     };
@@ -46,9 +53,9 @@ export function DepositFilterPreview({ buckets }: Props) {
       .catch(e => setError(e.message ?? 'preview failed'))
       .finally(() => setLoading(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buckets]);
+  }, [slots]);
 
-  const buildSpec = (): Omit<DepositFilterPreviewRequest, 'buckets' | 'offset' | 'limit'> | null => {
+  const buildSpec = (): Omit<DepositFilterPreviewRequest, keyof SlotMap | 'offset' | 'limit'> | null => {
     if (managerId == null) return null;
     return {
       manager_id: managerId,
@@ -58,12 +65,12 @@ export function DepositFilterPreview({ buckets }: Props) {
     };
   };
 
-  const fetchPage = async (spec: Omit<DepositFilterPreviewRequest, 'buckets' | 'offset' | 'limit'>, p: number) => {
+  const fetchPage = async (spec: Omit<DepositFilterPreviewRequest, keyof SlotMap | 'offset' | 'limit'>, p: number) => {
     setLoading(true); setError(null);
     try {
       const r = await DepositFiltersAPI.preview({
         ...spec,
-        buckets: buckets.map(b => ({ key: b.key, label: b.label, predicate: b.predicate })),
+        ...slots,
         offset: (p - 1) * PAGE_SIZE,
         limit:  PAGE_SIZE,
       });
@@ -91,10 +98,7 @@ export function DepositFilterPreview({ buckets }: Props) {
     if (!s) { setError('Select a manager first.'); return; }
     setCsvLoading(true); setError(null);
     try {
-      const blob = await DepositFiltersAPI.previewCsv({
-        ...s,
-        buckets: buckets.map(b => ({ key: b.key, label: b.label, predicate: b.predicate })),
-      });
+      const blob = await DepositFiltersAPI.previewCsv({ ...s, ...slots });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -117,8 +121,12 @@ export function DepositFilterPreview({ buckets }: Props) {
   const canPrev  = page > 1 && !loading;
   const canNext  = page < lastPage && !loading;
 
-  //--- Bucket-key → display label lookup for the row badges.
-  const labelByKey = new Map(buckets.map(b => [b.key, b.label]));
+  //--- Backend emits the four standard keys in a stable order; build a
+  //--- lookup so the header strip can render zero counts for buckets with
+  //--- no predicate yet.
+  const countByKey = new Map<string, number>(
+    (result?.buckets ?? []).map(b => [b.key, b.matched_count])
+  );
 
   return (
     <div className="space-y-3">
@@ -163,17 +171,15 @@ export function DepositFilterPreview({ buckets }: Props) {
         <div className="border border-ink-200 rounded">
           <div className="px-3 py-2 bg-ink-50 border-b border-ink-100 text-sm flex items-center gap-3 flex-wrap">
             <span className="font-semibold">{fmtInt(total)} cash-flow deals</span>
-            {result.buckets.length > 0 && (
-              <span className="flex items-center gap-1.5 flex-wrap">
-                <span className="text-ink-400">·</span>
-                {result.buckets.map(b => (
-                  <span key={b.key} className="inline-flex items-center gap-1 text-xs">
-                    <span className="font-mono text-ink-700">{b.key}</span>
-                    <span className="font-mono text-emerald-700 font-semibold">{fmtInt(b.matched_count)}</span>
-                  </span>
-                ))}
-              </span>
-            )}
+            <span className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-ink-400">·</span>
+              {DEPOSIT_BUCKET_KEYS.map(k => (
+                <span key={k} className="inline-flex items-center gap-1 text-xs">
+                  <span className="font-mono text-ink-700">{k}</span>
+                  <span className="font-mono text-emerald-700 font-semibold">{fmtInt(countByKey.get(k) ?? 0)}</span>
+                </span>
+              ))}
+            </span>
             {total > 0 && (
               <span className="text-ink-500">· showing {startRow}–{endRow}</span>
             )}
@@ -220,7 +226,7 @@ export function DepositFilterPreview({ buckets }: Props) {
                           {r.matched_buckets.map(k => (
                             <span key={k}
                                   className="inline-block px-1.5 py-0.5 text-[10px] font-semibold bg-emerald-600 text-white rounded"
-                                  title={labelByKey.get(k) ?? k}>
+                                  title={DEPOSIT_BUCKET_LABELS[k as DepositBucketKey] ?? k}>
                               {k}
                             </span>
                           ))}

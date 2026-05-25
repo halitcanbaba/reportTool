@@ -12,19 +12,10 @@ type WrapperProps = {
 
 //--- One draggable row inside the picker.
 function DraggableField({ f, onPick }: { f: FieldDef; onPick: (f: FieldDef) => void }) {
-  //--- Per-bucket virtual entries share f.name with the base field (e.g.
-  //--- "sum_deposit_amount" expanded to one entry per bucket key). Append
-  //--- the bucket to the dnd-kit id so each entry is uniquely draggable.
-  const dndId = f.default_bucket
-    ? `field:${f.name}:${f.default_bucket}`
-    : `field:${f.name}`;
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    id: dndId,
+    id: `field:${f.name}`,
     data: { kind: 'field', field: f },
   });
-  //--- Per-bucket virtual entries lead with the bucket's friendly label;
-  //--- the generic backend field name (sum_deposit_amount etc.) is hidden
-  //--- to keep the list scannable when many buckets exist.
   return (
     <button type="button"
             ref={setNodeRef}
@@ -36,14 +27,8 @@ function DraggableField({ f, onPick }: { f: FieldDef; onPick: (f: FieldDef) => v
               (isDragging ? 'opacity-40' : '')
             }>
       <span className="text-sm">
-        {f.default_bucket ? (
-          <span className="text-ink-800">{f.label}</span>
-        ) : (
-          <>
-            <code className="font-mono text-xs text-ink-700">{f.name}</code>
-            <span className="ml-2 text-ink-500 text-xs">{f.label}</span>
-          </>
-        )}
+        <code className="font-mono text-xs text-ink-700">{f.name}</code>
+        <span className="ml-2 text-ink-500 text-xs">{f.label}</span>
       </span>
       <span className="text-xs text-ink-400 font-mono">
         {f.arity === 0 ? '· now' : f.arity === 1 ? '(date)' : '(F,T)'}
@@ -93,11 +78,7 @@ export function FieldPickerBody({ catalog, filter, onPick, autoFocus = true }: {
             <div key={cat.id} className="border-b border-ink-50 last:border-0">
               <div className="px-3 py-1.5 text-[11px] uppercase font-semibold text-ink-500 bg-ink-50">{cat.id} · {cat.label}</div>
               <ul>
-                {list.map(f => (
-                  <li key={f.default_bucket ? `${f.name}__${f.default_bucket}` : f.name}>
-                    <DraggableField f={f} onPick={onPick} />
-                  </li>
-                ))}
+                {list.map(f => <li key={f.name}><DraggableField f={f} onPick={onPick} /></li>)}
               </ul>
             </div>
           );
