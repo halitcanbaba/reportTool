@@ -68,6 +68,15 @@ export function ScheduleListPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  //--- Schedules the user just triggered via Run-Now. While membership
+  //--- holds, the silent poll preserves a synthetic 'queued' chip even
+  //--- if the backend reports an empty last_status (old binary that
+  //--- hasn't been rebuilt with the matching server-side change), so the
+  //--- chip doesn't flash on then immediately vanish. Removed when the
+  //--- backend reports a terminal state (completed/failed) or after a
+  //--- safety timeout in the poll loop.
+  const [pendingRunIds, setPendingRunIds] = useState<Set<number>>(new Set());
+
   //--- `silent=true` skips the loading spinner so background polls (after
   //--- Run-Now) update items in place without hiding the table — otherwise
   //--- every 5s tick blanks the rows to "Loading…" and the status-badge
@@ -76,7 +85,22 @@ export function ScheduleListPage() {
     if (!silent) setLoading(true);
     try {
       const [scs, rms] = await Promise.all([SchedulesAPI.list(), ReadyMadeAPI.list()]);
-      setItems(scs);
+      //--- Merge: rows in pendingRunIds whose backend status is empty
+      //--- (or 'completed' from a *prior* run that hasn't been replaced
+      //--- yet) get the optimistic 'queued' chip preserved.
+      setItems(prevItems => {
+        const prevById = new Map(prevItems.map(it => [it.id, it]));
+        return scs.map(s => {
+          if (!pendingRunIds.has(s.id)) return s;
+          const prev = prevById.get(s.id);
+          const prevWasQueued = prev?.last_status === 'queued';
+          //--- Only override when the server hasn't moved past the click
+          //--- (empty status, or still showing the prior completed run).
+          const serverBehind = s.last_status === ''
+                            || (s.last_status === 'completed' && prevWasQueued);
+          return serverBehind ? { ...s, last_status: 'queued' } : s;
+        });
+      });
       setReadyMades(new Map(rms.map(r => [r.id, r])));
       setError(null);
     } catch (e: any) { setError(e.message ?? 'failed'); }
@@ -98,12 +122,10 @@ export function ScheduleListPage() {
   const onRunNow = async (s: ScheduleEntry) => {
     if (!confirm(`Run "${s.name}" now? A job will be queued and the next firing will be skipped.`)) return;
 
-    //--- Optimistic update: flip the row's badge to 'queued' BEFORE the
-    //--- API call returns so the user sees instant visual confirmation
-    //--- regardless of network latency or whether the backend has been
-    //--- rebuilt with the matching server-side change. The next silent
-    //--- reload (and the periodic polls) will overwrite this with the
-    //--- authoritative server state — dispatched / delivering / etc.
+    //--- Mark as pending so subsequent silent polls preserve the 'queued'
+    //--- chip until the backend reports a meaningful (non-empty,
+    //--- non-prior-completed) status.
+    setPendingRunIds(prev => { const next = new Set(prev); next.add(s.id); return next; });
     setItems(prev => prev.map(x => x.id === s.id
       ? { ...x, last_status: 'queued', last_error: '' }
       : x));
@@ -111,8 +133,8 @@ export function ScheduleListPage() {
     try {
       await SchedulesAPI.runNow(s.id);
     } catch (e: any) {
-      //--- Roll back the optimistic flag on a hard failure so the row
-      //--- doesn't sit forever as fake "queued".
+      //--- Roll back on failure and stop holding the chip.
+      setPendingRunIds(prev => { const next = new Set(prev); next.delete(s.id); return next; });
       setItems(prev => prev.map(x => x.id === s.id ? { ...x, last_status: s.last_status } : x));
       alert(e.message ?? 'run-now failed');
       return;
@@ -122,13 +144,45 @@ export function ScheduleListPage() {
     await reload(true);
     //--- Then poll every 2s for the first 30s (catches the scheduler tick
     //--- ≤60s plus the dispatched→delivering→completed transitions),
-    //--- backing off to every 5s for another 2 minutes. All polls are
-    //--- silent so the badge animation stays continuous on-screen.
+    //--- backing off to every 5s for another 2.5 minutes. The pending-id
+    //--- guard keeps 'queued' on screen the whole time the backend hasn't
+    //--- moved; once a fresh terminal state lands we release the guard
+    //--- so the row reflects the authoritative chip going forward.
     const startedAt = Date.now();
+    const releaseIfTerminal = (fresh: ScheduleEntry | undefined) => {
+      if (!fresh) return;
+      const st = fresh.last_status;
+      //--- Released on dispatched/delivering/completed/failed AND when
+      //--- the new last_run_at is past our click time (cheap proxy for
+      //--- "this is the response to OUR run, not a prior one").
+      const advanced = st === 'dispatched' || st === 'delivering'
+                     || st === 'completed' || st === 'failed';
+      const isFreshRun = fresh.last_run_at * 1000 >= startedAt - 2000;
+      if (advanced && isFreshRun) {
+        setPendingRunIds(prev => {
+          if (!prev.has(s.id)) return prev;
+          const next = new Set(prev); next.delete(s.id); return next;
+        });
+      }
+    };
+
     const tick = async () => {
       const elapsed = Date.now() - startedAt;
-      if (elapsed > 2.5 * 60_000) return;
+      if (elapsed > 2.5 * 60_000) {
+        //--- Final safety release so a stuck row doesn't stay 'queued' forever.
+        setPendingRunIds(prev => {
+          if (!prev.has(s.id)) return prev;
+          const next = new Set(prev); next.delete(s.id); return next;
+        });
+        return;
+      }
       await reload(true);
+      //--- Re-read the latest items via the setter callback so we don't
+      //--- depend on closure-captured stale state.
+      setItems(curr => {
+        releaseIfTerminal(curr.find(x => x.id === s.id));
+        return curr;
+      });
       setTimeout(tick, elapsed < 30_000 ? 2000 : 5000);
     };
     setTimeout(tick, 2000);
