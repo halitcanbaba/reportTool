@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { SchedulesAPI } from '../api/schedules';
 import { ReadyMadeAPI } from '../api/readyMade';
@@ -67,6 +67,17 @@ export function ScheduleListPage() {
   const [readyMades, setReadyMades] = useState<Map<number, ReadyMadeReport>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  //--- Status filter for the 30-40-same-hour case: when many schedules
+  //--- fire together and some fail, the user needs to isolate the failed
+  //--- rows in one click instead of scrolling and squinting at chips.
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+
+  //--- Set of schedule ids whose last_error is currently expanded inline.
+  //--- Click toggles. Collapsed = 2-line clamp (existing behavior); expanded
+  //--- = full text with a copy button so the user can paste the full error
+  //--- into a support ticket without server log access.
+  const [expandedErrors, setExpandedErrors] = useState<Set<number>>(new Set());
 
   //--- Schedules the user just triggered, with their click timestamps.
   //--- A ref (not React state) so reload() sees the latest value
@@ -330,16 +341,86 @@ export function ScheduleListPage() {
     {
       key: 'status', header: 'Last status',
       searchValue: s => s.last_status,
-      render: s => (
-        <div>
-          <div className="flex items-center gap-2">
-            {statusBadge(s.last_status)}
-            {s.last_run_at > 0 && <span className="text-[11px] text-ink-500">{fmtDateTime(s.last_run_at)}</span>}
+      render: s => {
+        const expanded = expandedErrors.has(s.id);
+        return (
+          <div>
+            <div className="flex items-center gap-2">
+              {statusBadge(s.last_status)}
+              {s.last_run_at > 0 && <span className="text-[11px] text-ink-500">{fmtDateTime(s.last_run_at)}</span>}
+            </div>
+            {s.last_error && (
+              <div className="mt-1">
+                <div
+                  className={`text-[11px] text-red-700 font-mono cursor-pointer hover:text-red-900 ${expanded ? 'whitespace-pre-wrap break-words' : 'line-clamp-2'}`}
+                  onClick={e => {
+                    e.stopPropagation();
+                    setExpandedErrors(prev => {
+                      const next = new Set(prev);
+                      if (next.has(s.id)) next.delete(s.id); else next.add(s.id);
+                      return next;
+                    });
+                  }}
+                  title={expanded ? 'click to collapse' : 'click to see the full error'}
+                >
+                  {s.last_error}
+                </div>
+                {expanded && (
+                  <button
+                    type="button"
+                    className="mt-1 text-[10px] px-1.5 py-0.5 rounded border border-ink-200 bg-white text-ink-600 hover:bg-ink-50"
+                    onClick={e => {
+                      //--- Don't propagate to row drag/select or expand toggle.
+                      e.stopPropagation();
+                      navigator.clipboard.writeText(s.last_error).catch(() => {
+                        //--- Clipboard blocked (insecure context, denied);
+                        //--- user can still text-select the error manually.
+                      });
+                    }}
+                  >Copy error</button>
+                )}
+              </div>
+            )}
           </div>
-          {s.last_error && <div className="text-[11px] text-red-700 font-mono mt-1 line-clamp-2" title={s.last_error}>{s.last_error}</div>}
-        </div>
-      ),
+        );
+      },
     },
+  ];
+
+  //--- Live counts per status across the loaded set. The empty-string
+  //--- bucket ('—' chip) is grouped under itself so the pill labelled
+  //--- "Idle" can show how many haven't fired yet.
+  const statusCounts = useMemo(() => {
+    const c: Record<string, number> = {
+      all: items.length, completed: 0, failed: 0, queued: 0,
+      dispatched: 0, delivering: 0, idle: 0,
+    };
+    for (const s of items) {
+      const k = s.last_status || 'idle';
+      c[k] = (c[k] ?? 0) + 1;
+    }
+    return c;
+  }, [items]);
+
+  const filteredItems = useMemo(() => {
+    if (statusFilter === 'all') return items;
+    if (statusFilter === 'idle') return items.filter(s => !s.last_status);
+    return items.filter(s => s.last_status === statusFilter);
+  }, [items, statusFilter]);
+
+  //--- Pill order roughly mirrors the lifecycle so the eye scans it as a
+  //--- pipeline. 'Failed' is rightmost so an unhappy red number stands
+  //--- out at the visual end. Counts are baked into the label so users
+  //--- can see at a glance whether the cohort had any failures without
+  //--- clicking through.
+  const pills: { value: string; label: string; cls: string }[] = [
+    { value: 'all',        label: 'All',        cls: 'bg-ink-50 text-ink-700 border-ink-300' },
+    { value: 'idle',       label: 'Idle',       cls: 'bg-ink-50 text-ink-500 border-ink-200' },
+    { value: 'queued',     label: 'Queued',     cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+    { value: 'dispatched', label: 'Dispatched', cls: 'bg-blue-50 text-blue-700 border-blue-200' },
+    { value: 'delivering', label: 'Delivering', cls: 'bg-blue-50 text-blue-700 border-blue-200' },
+    { value: 'completed',  label: 'Completed',  cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+    { value: 'failed',     label: 'Failed',     cls: 'bg-red-50 text-red-700 border-red-200' },
   ];
 
   return (
@@ -363,9 +444,29 @@ export function ScheduleListPage() {
       )}
 
       {!loading && items.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {pills.map(p => {
+            const n = statusCounts[p.value] ?? 0;
+            const active = statusFilter === p.value;
+            const dim = !active && n === 0 ? 'opacity-50' : '';
+            return (
+              <button
+                key={p.value}
+                type="button"
+                onClick={() => setStatusFilter(p.value)}
+                className={`text-xs px-2.5 py-1 rounded border transition-colors ${p.cls} ${dim} ${active ? 'ring-2 ring-offset-1 ring-ink-400 font-semibold' : 'hover:brightness-95'}`}
+              >
+                {p.label} <span className="ml-1 font-mono">({n})</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {!loading && items.length > 0 && (
         <FolderedCard<ScheduleEntry>
           entityType="schedule"
-          rows={items}
+          rows={filteredItems}
           rowKey={s => s.id}
           folderIdOf={s => s.folder_id ?? null}
           rowClassName={s => (s.enabled ? '' : 'opacity-60')}
