@@ -7,10 +7,24 @@
 #include "CurrentUser.h"
 #include "../third_party/httplib.h"
 #include "../core/Crypto.h"
+#include "../core/Logger.h"
 #include "../core/SessionManager.h"
 #include "../db/Repos.h"
 
 using nlohmann::json;
+
+namespace
+{
+   //--- Safe-to-log shorthand for an opaque token. Returns first 4 chars
+   //--- plus "...". For diagnostics we need enough to tell two tokens
+   //--- apart across processes/tenants but not enough to replay one if
+   //--- the log lands in the wrong inbox.
+   std::string TokPrefix(const std::string& s)
+   {
+      if(s.empty()) return "(empty)";
+      return s.substr(0, std::min<size_t>(4, s.size())) + "...";
+   }
+}
 
 namespace
 {
@@ -90,12 +104,28 @@ void AuthRoutes::Register(httplib::Server& srv, AppContext* ctx)
       const std::string tok      = req.has_param("token") ? req.get_param_value("token") : std::string();
       const std::string redirect = req.has_param("path")  ? req.get_param_value("path")  : std::string("/");
       const std::string expected = SettingsRepo::Get(*ctx->db, "screenshot_token");
+      //--- Log enough to diagnose multi-tenant misconfig (one tenant's
+      //--- screenshot URL pointing at another tenant's backend) without
+      //--- writing full tokens to disk. Host header tells the operator
+      //--- which vhost the headless browser actually hit — usually the
+      //--- giveaway when screenshot_url_base is wrong.
       if(expected.empty() || tok.empty() || tok != expected)
-      { SendError(res, 403, "invalid screenshot token"); return; }
+      {
+         if(ctx->log) ctx->log->Warn(
+            "screenshot-bootstrap REJECTED: url-token=%s db-token=%s host=%s path=%s",
+            TokPrefix(tok).c_str(), TokPrefix(expected).c_str(),
+            req.get_header_value("Host").c_str(), redirect.c_str());
+         SendError(res, 403, "invalid screenshot token");
+         return;
+      }
       //--- Path must be relative to keep the redirect on the same origin
       //--- (defends against open-redirect even on a "validated" call).
       if(redirect.empty() || redirect[0] != '/')
       { SendError(res, 400, "redirect path must be absolute (start with /)"); return; }
+      if(ctx->log) ctx->log->Info(
+         "screenshot-bootstrap OK: token=%s host=%s path=%s",
+         TokPrefix(expected).c_str(),
+         req.get_header_value("Host").c_str(), redirect.c_str());
       res.set_header("Set-Cookie",
          "rt_screenshot=" + expected + "; Path=/; Max-Age=300; SameSite=Lax; HttpOnly");
       res.status = 302;

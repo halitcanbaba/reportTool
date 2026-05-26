@@ -934,6 +934,23 @@ void Scheduler::TickOnce()
          //--- wrong, or the page times out, mark the delivery 'failed' so
          //--- the user knows the screenshot is missing — silently sending
          //--- a fallback text disguised the failure as "completed".
+         //---
+         //--- Diagnostic log up front: capture the URL base + token prefix
+         //--- this scheduler instance is about to ship to the headless
+         //--- browser. When the bootstrap endpoint rejects (cross-tenant
+         //--- misconfig, stale token in URL, …) the operator can grep
+         //--- this line alongside the matching "screenshot-bootstrap
+         //--- REJECTED" warn entry to see which token went where.
+         {
+            std::string dbg_base = SettingsRepo::Get(*m_ctx->db, "screenshot_url_base");
+            if(dbg_base.empty()) dbg_base = "http://localhost:8090";
+            const std::string dbg_tok = SettingsRepo::Get(*m_ctx->db, "screenshot_token");
+            const std::string dbg_prefix = dbg_tok.empty() ? std::string("(empty)")
+                                         : dbg_tok.substr(0, 4) + "...";
+            m_ctx->log->Info("Screenshot delivery start [sch=%lld job=%lld]: base=%s token=%s",
+                             (long long)sch.id, (long long)job->id,
+                             dbg_base.c_str(), dbg_prefix.c_str());
+         }
          const std::string png = BuildScreenshotForJob(*m_ctx->db, *job);
          if(png.empty())
          {
