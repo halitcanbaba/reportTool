@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { SchedulesAPI } from '../api/schedules';
 import { ReadyMadeAPI } from '../api/readyMade';
@@ -68,14 +68,35 @@ export function ScheduleListPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  //--- Schedules the user just triggered via Run-Now. While membership
-  //--- holds, the silent poll preserves a synthetic 'queued' chip even
-  //--- if the backend reports an empty last_status (old binary that
-  //--- hasn't been rebuilt with the matching server-side change), so the
-  //--- chip doesn't flash on then immediately vanish. Removed when the
-  //--- backend reports a terminal state (completed/failed) or after a
-  //--- safety timeout in the poll loop.
-  const [pendingRunIds, setPendingRunIds] = useState<Set<number>>(new Set());
+  //--- Status filter for the 30-40-same-hour case: when many schedules
+  //--- fire together and some fail, the user needs to isolate the failed
+  //--- rows in one click instead of scrolling and squinting at chips.
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+
+  //--- Set of schedule ids whose last_error is currently expanded inline.
+  //--- Click toggles. Collapsed = 2-line clamp (existing behavior); expanded
+  //--- = full text with a copy button so the user can paste the full error
+  //--- into a support ticket without server log access.
+  const [expandedErrors, setExpandedErrors] = useState<Set<number>>(new Set());
+
+  //--- Schedules the user just triggered, with their click timestamps.
+  //--- A ref (not React state) so reload() sees the latest value
+  //--- synchronously — state setters are queued, the very next reload()
+  //--- after onRunNow would otherwise read a stale closure that doesn't
+  //--- include the just-clicked id and instantly overwrite the optimistic
+  //--- 'queued' chip with whatever the backend returned.
+  //--- client is Date.now() at click (drives elapsed/dwell timers, which
+  //--- must use the client clock to stay aligned with setTimeout). server
+  //--- is the backend's queued_for (epoch ms) at click — compared against
+  //--- last_run_at (also server clock) for the fresh-run check, so client
+  //--- clock drift never turns a real run into a stale-looking 'completed'.
+  const pendingRunRef = useRef<Map<number, { client: number; server: number }>>(new Map());
+
+  //--- Minimum visible time for the 'queued' chip after a manual run.
+  //--- Without this, a fast pipeline (csv format, scheduler tick fires
+  //--- right after the click) flips the row from queued straight to
+  //--- completed in ~3 seconds and the user perceives no feedback.
+  const QUEUED_DWELL_MS = 3000;
 
   //--- `silent=true` skips the loading spinner so background polls (after
   //--- Run-Now) update items in place without hiding the table — otherwise
@@ -85,20 +106,38 @@ export function ScheduleListPage() {
     if (!silent) setLoading(true);
     try {
       const [scs, rms] = await Promise.all([SchedulesAPI.list(), ReadyMadeAPI.list()]);
-      //--- Merge: rows in pendingRunIds whose backend status is empty
-      //--- (or 'completed' from a *prior* run that hasn't been replaced
-      //--- yet) get the optimistic 'queued' chip preserved.
       setItems(prevItems => {
         const prevById = new Map(prevItems.map(it => [it.id, it]));
         return scs.map(s => {
-          if (!pendingRunIds.has(s.id)) return s;
+          const stamps = pendingRunRef.current.get(s.id);
+          if (stamps == null) return s;
+
+          const elapsed = Date.now() - stamps.client;
+          //--- Phase 1 — dwell window: keep the chip visibly 'queued' no
+          //--- matter what the backend says, so a sub-3-second pipeline
+          //--- still surfaces the "click registered" feedback.
+          if (elapsed < QUEUED_DWELL_MS) {
+            return { ...s, last_status: 'queued' };
+          }
+
+          //--- Phase 2 — past dwell. If the backend is still flat (''),
+          //--- or still showing the prior 'completed' for our schedule
+          //--- (its last_run_at is older than our click), hold queued.
+          //--- Compare last_run_at against the SERVER's queued_for, not
+          //--- the client clock — otherwise a few seconds of drift can
+          //--- make a real, fresh dispatch look stale and the chip stays
+          //--- stuck in queued until the 5min timeout.
           const prev = prevById.get(s.id);
           const prevWasQueued = prev?.last_status === 'queued';
-          //--- Only override when the server hasn't moved past the click
-          //--- (empty status, or still showing the prior completed run).
+          const serverHasFreshRun = s.last_run_at * 1000 >= stamps.server - 2000;
           const serverBehind = s.last_status === ''
-                            || (s.last_status === 'completed' && prevWasQueued);
-          return serverBehind ? { ...s, last_status: 'queued' } : s;
+                            || (s.last_status === 'completed' && prevWasQueued && !serverHasFreshRun);
+          if (serverBehind) return { ...s, last_status: 'queued' };
+
+          //--- Phase 3 — backend actually advanced for THIS run. Release
+          //--- the ref so subsequent polls let backend authority through.
+          if (serverHasFreshRun) pendingRunRef.current.delete(s.id);
+          return s;
         });
       });
       setReadyMades(new Map(rms.map(r => [r.id, r])));
@@ -122,70 +161,81 @@ export function ScheduleListPage() {
   const onRunNow = async (s: ScheduleEntry) => {
     if (!confirm(`Run "${s.name}" now? A job will be queued and the next firing will be skipped.`)) return;
 
-    //--- Mark as pending so subsequent silent polls preserve the 'queued'
-    //--- chip until the backend reports a meaningful (non-empty,
-    //--- non-prior-completed) status.
-    setPendingRunIds(prev => { const next = new Set(prev); next.add(s.id); return next; });
+    //--- Synchronous ref update so the very next reload() (queued behind
+    //--- the API call) reads the latest pending set. State-only tracking
+    //--- would lose this race because setState is queued and the closure
+    //--- captured by reload reflects the PREVIOUS render's snapshot.
+    //--- Seed with client time; we'll overwrite with the server's
+    //--- queued_for as soon as the API responds so the fresh-run check
+    //--- compares two values in the same clock domain.
+    const clientStartedAt = Date.now();
+    pendingRunRef.current.set(s.id, { client: clientStartedAt, server: clientStartedAt });
+
+    //--- Optimistic chip on the row itself for instant feedback. The
+    //--- dwell logic in reload() then HOLDS this chip for at least
+    //--- QUEUED_DWELL_MS so even an instant pipeline (csv format +
+    //--- favourable tick timing) still flashes queued visibly.
     setItems(prev => prev.map(x => x.id === s.id
       ? { ...x, last_status: 'queued', last_error: '' }
       : x));
 
+    let serverStartedAt = clientStartedAt;
     try {
-      await SchedulesAPI.runNow(s.id);
+      const r = await SchedulesAPI.runNow(s.id);
+      //--- queued_for is the server's wall-clock time (epoch seconds)
+      //--- at which it accepted the request. Use that as the canonical
+      //--- "did this run start before or after backend's last_run_at"
+      //--- check — eliminates client/server clock-drift false-negatives
+      //--- that would otherwise leave the chip stuck on 'queued'.
+      if (typeof r?.queued_for === 'number') serverStartedAt = r.queued_for * 1000;
+      pendingRunRef.current.set(s.id, { client: clientStartedAt, server: serverStartedAt });
     } catch (e: any) {
-      //--- Roll back on failure and stop holding the chip.
-      setPendingRunIds(prev => { const next = new Set(prev); next.delete(s.id); return next; });
+      pendingRunRef.current.delete(s.id);
       setItems(prev => prev.map(x => x.id === s.id ? { ...x, last_status: s.last_status } : x));
       alert(e.message ?? 'run-now failed');
       return;
     }
 
-    //--- Authoritative refresh, silent so the table doesn't blank.
-    await reload(true);
-    //--- Then poll every 2s for the first 30s (catches the scheduler tick
-    //--- ≤60s plus the dispatched→delivering→completed transitions),
-    //--- backing off to every 5s for another 2.5 minutes. The pending-id
-    //--- guard keeps 'queued' on screen the whole time the backend hasn't
-    //--- moved; once a fresh terminal state lands we release the guard
-    //--- so the row reflects the authoritative chip going forward.
-    const startedAt = Date.now();
-    const releaseIfTerminal = (fresh: ScheduleEntry | undefined) => {
-      if (!fresh) return;
-      const st = fresh.last_status;
-      //--- Released on dispatched/delivering/completed/failed AND when
-      //--- the new last_run_at is past our click time (cheap proxy for
-      //--- "this is the response to OUR run, not a prior one").
-      const advanced = st === 'dispatched' || st === 'delivering'
-                     || st === 'completed' || st === 'failed';
-      const isFreshRun = fresh.last_run_at * 1000 >= startedAt - 2000;
-      if (advanced && isFreshRun) {
-        setPendingRunIds(prev => {
-          if (!prev.has(s.id)) return prev;
-          const next = new Set(prev); next.delete(s.id); return next;
-        });
-      }
-    };
-
+    //--- Don't reload right away — wait for the dwell window so the
+    //--- 'queued' chip stays visible. Polls then track dispatched →
+    //--- delivering → completed transitions. The scheduler tick is ≤60s
+    //--- so dispatch lands within 60s and delivery within ~60s more;
+    //--- a 5min poll window covers the slowest realistic round-trip
+    //--- (image format + slow Telegram upload). Stop early once the
+    //--- schedule reaches a terminal state so we don't burn cycles.
+    const POLL_WINDOW_MS = 5 * 60_000;
     const tick = async () => {
-      const elapsed = Date.now() - startedAt;
-      if (elapsed > 2.5 * 60_000) {
-        //--- Final safety release so a stuck row doesn't stay 'queued' forever.
-        setPendingRunIds(prev => {
-          if (!prev.has(s.id)) return prev;
-          const next = new Set(prev); next.delete(s.id); return next;
-        });
+      const elapsed = Date.now() - clientStartedAt;
+      if (elapsed > POLL_WINDOW_MS) {
+        pendingRunRef.current.delete(s.id);
         return;
       }
       await reload(true);
-      //--- Re-read the latest items via the setter callback so we don't
-      //--- depend on closure-captured stale state.
+      //--- Peek at the latest items via the setter callback; if the row
+      //--- has reached a fresh-run terminal state ('completed'/'failed'
+      //--- with last_run_at past THIS run's server-side start), we're
+      //--- done. Compare both in epoch-ms server clock so client clock
+      //--- drift never makes a real completion look stale.
+      let reachedTerminal = false;
       setItems(curr => {
-        releaseIfTerminal(curr.find(x => x.id === s.id));
+        const row = curr.find(x => x.id === s.id);
+        if (row) {
+          const fresh = row.last_run_at * 1000 >= serverStartedAt - 2000;
+          const term  = row.last_status === 'completed' || row.last_status === 'failed';
+          if (fresh && term) reachedTerminal = true;
+        }
         return curr;
       });
+      if (reachedTerminal) {
+        pendingRunRef.current.delete(s.id);
+        return;
+      }
+      //--- 2s polls in the first 30s catch the scheduler-tick handoff;
+      //--- then back off to 5s for the rest of the window.
       setTimeout(tick, elapsed < 30_000 ? 2000 : 5000);
     };
-    setTimeout(tick, 2000);
+    //--- First poll AFTER the dwell window so the queued chip survives.
+    setTimeout(tick, QUEUED_DWELL_MS + 200);
   };
 
   const onDuplicate = async (s: ScheduleEntry) => {
@@ -291,16 +341,86 @@ export function ScheduleListPage() {
     {
       key: 'status', header: 'Last status',
       searchValue: s => s.last_status,
-      render: s => (
-        <div>
-          <div className="flex items-center gap-2">
-            {statusBadge(s.last_status)}
-            {s.last_run_at > 0 && <span className="text-[11px] text-ink-500">{fmtDateTime(s.last_run_at)}</span>}
+      render: s => {
+        const expanded = expandedErrors.has(s.id);
+        return (
+          <div>
+            <div className="flex items-center gap-2">
+              {statusBadge(s.last_status)}
+              {s.last_run_at > 0 && <span className="text-[11px] text-ink-500">{fmtDateTime(s.last_run_at)}</span>}
+            </div>
+            {s.last_error && (
+              <div className="mt-1">
+                <div
+                  className={`text-[11px] text-red-700 font-mono cursor-pointer hover:text-red-900 ${expanded ? 'whitespace-pre-wrap break-words' : 'line-clamp-2'}`}
+                  onClick={e => {
+                    e.stopPropagation();
+                    setExpandedErrors(prev => {
+                      const next = new Set(prev);
+                      if (next.has(s.id)) next.delete(s.id); else next.add(s.id);
+                      return next;
+                    });
+                  }}
+                  title={expanded ? 'click to collapse' : 'click to see the full error'}
+                >
+                  {s.last_error}
+                </div>
+                {expanded && (
+                  <button
+                    type="button"
+                    className="mt-1 text-[10px] px-1.5 py-0.5 rounded border border-ink-200 bg-white text-ink-600 hover:bg-ink-50"
+                    onClick={e => {
+                      //--- Don't propagate to row drag/select or expand toggle.
+                      e.stopPropagation();
+                      navigator.clipboard.writeText(s.last_error).catch(() => {
+                        //--- Clipboard blocked (insecure context, denied);
+                        //--- user can still text-select the error manually.
+                      });
+                    }}
+                  >Copy error</button>
+                )}
+              </div>
+            )}
           </div>
-          {s.last_error && <div className="text-[11px] text-red-700 font-mono mt-1 line-clamp-2" title={s.last_error}>{s.last_error}</div>}
-        </div>
-      ),
+        );
+      },
     },
+  ];
+
+  //--- Live counts per status across the loaded set. The empty-string
+  //--- bucket ('—' chip) is grouped under itself so the pill labelled
+  //--- "Idle" can show how many haven't fired yet.
+  const statusCounts = useMemo(() => {
+    const c: Record<string, number> = {
+      all: items.length, completed: 0, failed: 0, queued: 0,
+      dispatched: 0, delivering: 0, idle: 0,
+    };
+    for (const s of items) {
+      const k = s.last_status || 'idle';
+      c[k] = (c[k] ?? 0) + 1;
+    }
+    return c;
+  }, [items]);
+
+  const filteredItems = useMemo(() => {
+    if (statusFilter === 'all') return items;
+    if (statusFilter === 'idle') return items.filter(s => !s.last_status);
+    return items.filter(s => s.last_status === statusFilter);
+  }, [items, statusFilter]);
+
+  //--- Pill order roughly mirrors the lifecycle so the eye scans it as a
+  //--- pipeline. 'Failed' is rightmost so an unhappy red number stands
+  //--- out at the visual end. Counts are baked into the label so users
+  //--- can see at a glance whether the cohort had any failures without
+  //--- clicking through.
+  const pills: { value: string; label: string; cls: string }[] = [
+    { value: 'all',        label: 'All',        cls: 'bg-ink-50 text-ink-700 border-ink-300' },
+    { value: 'idle',       label: 'Idle',       cls: 'bg-ink-50 text-ink-500 border-ink-200' },
+    { value: 'queued',     label: 'Queued',     cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+    { value: 'dispatched', label: 'Dispatched', cls: 'bg-blue-50 text-blue-700 border-blue-200' },
+    { value: 'delivering', label: 'Delivering', cls: 'bg-blue-50 text-blue-700 border-blue-200' },
+    { value: 'completed',  label: 'Completed',  cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+    { value: 'failed',     label: 'Failed',     cls: 'bg-red-50 text-red-700 border-red-200' },
   ];
 
   return (
@@ -324,9 +444,29 @@ export function ScheduleListPage() {
       )}
 
       {!loading && items.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {pills.map(p => {
+            const n = statusCounts[p.value] ?? 0;
+            const active = statusFilter === p.value;
+            const dim = !active && n === 0 ? 'opacity-50' : '';
+            return (
+              <button
+                key={p.value}
+                type="button"
+                onClick={() => setStatusFilter(p.value)}
+                className={`text-xs px-2.5 py-1 rounded border transition-colors ${p.cls} ${dim} ${active ? 'ring-2 ring-offset-1 ring-ink-400 font-semibold' : 'hover:brightness-95'}`}
+              >
+                {p.label} <span className="ml-1 font-mono">({n})</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {!loading && items.length > 0 && (
         <FolderedCard<ScheduleEntry>
           entityType="schedule"
-          rows={items}
+          rows={filteredItems}
           rowKey={s => s.id}
           folderIdOf={s => s.folder_id ?? null}
           rowClassName={s => (s.enabled ? '' : 'opacity-60')}

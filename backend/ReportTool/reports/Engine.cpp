@@ -1045,6 +1045,105 @@ void Engine::Run(AppContext& ctx, int64_t job_id)
 
    JobRepo::UpdateStatus(*ctx.db, job_id, JobStatus::Running, 0.80);
 
+   //--- Pre-aggregation per-login row filter (template.row_filters).
+   //--- Each filter references a ColumnSpec by key; we evaluate that
+   //--- column's formula in a per-login EvalContext (this user + this
+   //--- login's slice of every loaded data source) and drop the login
+   //--- if any filter fails. Runs AFTER data load (so formulas using
+   //--- aggregator fields see this login's deals/dailies) and BEFORE
+   //--- pivot context building (so dropped logins never contribute to
+   //--- any sum/count/etc. in either per_account or future pivot mode).
+   //--- AND semantics. See ReportTemplate::row_filters in Records.h.
+   if(!tpl.row_filters.empty())
+   {
+      static const std::vector<DailyRow>          kRfEmptyDaily;
+      static const std::vector<DealRow>           kRfEmptyDeals;
+      static const std::vector<PositionRow>       kRfEmptyPos;
+      static const std::vector<OpenOrderRow>      kRfEmptyOO;
+      static const std::vector<HistoryOrderRow>   kRfEmptyOH;
+      static const AccountInfo                    kRfEmptyAcc;
+
+      //--- Resolve filter.column_key → ColumnSpec* once outside the loop.
+      std::vector<const ColumnSpec*> filter_cols;
+      filter_cols.reserve(tpl.row_filters.size());
+      for(const auto& f : tpl.row_filters) {
+         auto it = std::find_if(tpl.columns.begin(), tpl.columns.end(),
+                                [&](const ColumnSpec& c){ return c.key == f.column_key; });
+         filter_cols.push_back(it == tpl.columns.end() ? nullptr : &*it);
+      }
+
+      const size_t before = users.size();
+      users.erase(
+         std::remove_if(users.begin(), users.end(), [&](const UserInfo& u){
+            const uint64_t login = u.login;
+            auto daily_it = daily.find(login);
+            auto deal_it  = deals.find(login);
+            auto pos_it   = positions.find(login);
+            auto oo_it    = open_orders.find(login);
+            auto oh_it    = history_orders.find(login);
+            auto acc_it   = accounts.find(login);
+
+            EvalContext ec;
+            ec.user           = &u;
+            ec.account        = (acc_it   != accounts.end())       ? &acc_it->second   : nullptr;
+            ec.daily          = (daily_it != daily.end())          ? &daily_it->second : nullptr;
+            ec.deals          = (deal_it  != deals.end())          ? &deal_it->second  : nullptr;
+            ec.positions      = (pos_it   != positions.end())      ? &pos_it->second   : nullptr;
+            ec.open_orders    = (oo_it    != open_orders.end())    ? &oo_it->second    : nullptr;
+            ec.history_orders = (oh_it    != history_orders.end()) ? &oh_it->second    : nullptr;
+            ec.date_params    = &date_params;
+            ec.filters        = &filters;
+            ec.deposit_filter = df ? &(*df) : nullptr;
+            //--- Aggregators call Need() which throws on null but tolerates
+            //--- empty — swap nulls for static empties on every fetched src.
+            if(!ec.daily          && need_daily) ec.daily          = &kRfEmptyDaily;
+            if(!ec.deals          && need_deal)  ec.deals          = &kRfEmptyDeals;
+            if(!ec.positions      && need_pos)   ec.positions      = &kRfEmptyPos;
+            if(!ec.open_orders    && need_oo)    ec.open_orders    = &kRfEmptyOO;
+            if(!ec.history_orders && need_oh)    ec.history_orders = &kRfEmptyOH;
+            if(!ec.account        && need_acc)   ec.account        = &kRfEmptyAcc;
+
+            //--- Single-login bucket: bucket_users/bucket_accounts each hold
+            //--- exactly one entry (this user). Mirrors per_account row eval.
+            const std::vector<const UserInfo*>    bu{ &u };
+            const std::vector<const AccountInfo*> ba{ ec.account };
+            ec.bucket_users    = &bu;
+            ec.bucket_accounts = &ba;
+            ec.pivot_key_text  = std::to_string(login);
+            ec.pivot_key_num   = (double)login;
+
+            for(size_t i = 0; i < tpl.row_filters.size(); ++i)
+            {
+               const auto& f   = tpl.row_filters[i];
+               const ColumnSpec* col = filter_cols[i];
+               //--- Unknown column key (renamed/typo): treat as pass-through
+               //--- rather than dropping every login. The template Designer
+               //--- column picker only shows live keys so this is rare.
+               if(!col || !col->expr) continue;
+               double v = 0.0;
+               try { v = Expression::Evaluate(*col->expr, ec); }
+               catch(const std::exception& e) {
+                  ctx.log->Warn("row_filter eval (%s): %s",
+                                f.column_key.c_str(), e.what());
+                  return true;
+               }
+               const double t = f.value;
+               bool ok = true;
+               if     (f.op == "gt")  ok = v >  t;
+               else if(f.op == "gte") ok = v >= t;
+               else if(f.op == "lt")  ok = v <  t;
+               else if(f.op == "lte") ok = v <= t;
+               else if(f.op == "eq")  ok = v == t;
+               else if(f.op == "neq") ok = v != t;
+               if(!ok) return true;
+            }
+            return false;
+         }),
+         users.end());
+      ctx.log->Info("Row filters dropped %zu -> %zu logins",
+                    before, users.size());
+   }
+
    //--- Pivot-aware row generation --------------------------------
    //--- Every identifier column with pivot_key=true drives the row dimension.
    //--- Single-key cases route to the existing specialised builders so they

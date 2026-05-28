@@ -6,7 +6,7 @@ import { TemplatesAPI } from '../api/templates';
 import { FieldsAPI } from '../api/fields';
 import type {
   Column, ColumnFormat, ColumnKind, ExprNode, FieldCatalog, FieldDef, Predicate,
-  SortSpec, Template, TemplateInput, ValidationError,
+  RowFilter, RowFilterOp, SortSpec, Template, TemplateInput, ValidationError,
 } from '../types';
 import { FormulaEditor } from '../components/FormulaEditor';
 import { FieldPicker } from '../components/FieldPicker';
@@ -144,6 +144,22 @@ export function TemplateDesignerPage() {
       ...prev,
       columns: prev.columns.map((c, i) => i === idx ? { ...c, ...patch } : c),
     }));
+
+  //--- Row filter helpers. AND-list at the template level. Filters
+  //--- reference a numeric column by key; engine drops the login if any
+  //--- filter fails (pre-aggregation, see Engine.cpp row_filters block).
+  const addRowFilter = () => setTpl(prev => ({
+    ...prev,
+    row_filters: [...(prev.row_filters ?? []), { column_key: '', op: 'gt', value: 0 } as RowFilter],
+  }));
+  const patchRowFilter = (idx: number, patch: Partial<RowFilter>) => setTpl(prev => ({
+    ...prev,
+    row_filters: (prev.row_filters ?? []).map((f, i) => i === idx ? { ...f, ...patch } : f),
+  }));
+  const removeRowFilter = (idx: number) => setTpl(prev => ({
+    ...prev,
+    row_filters: (prev.row_filters ?? []).filter((_, i) => i !== idx),
+  }));
 
   //--- Update a formula column's expression AND re-derive its format from
   //--- the new operands' return_types, unless the user has manually overridden
@@ -566,6 +582,59 @@ export function TemplateDesignerPage() {
               <span className="text-ink-700">by |abs|</span>
             </label>
           </div>
+        </div>
+
+        <div className="card p-5 space-y-3">
+          <div className="flex items-baseline gap-2">
+            <div className="text-sm font-semibold text-ink-700 uppercase tracking-wide">Row filters</div>
+            <div className="text-[11px] text-ink-500 normal-case">
+              Applied per login before aggregation · AND · runs before sort &amp; Top N
+            </div>
+          </div>
+
+          {(tpl.row_filters ?? []).length === 0 && (
+            <div className="text-xs text-ink-400">No filters — all rows pass.</div>
+          )}
+
+          {(tpl.row_filters ?? []).map((f, idx) => {
+            //--- Restrict to numeric columns so "name > 0" can't be configured.
+            //--- 'number' is the initial format for fresh formula columns;
+            //--- include it so a newly added formula is filterable right away.
+            const numericCols = tpl.columns.filter(c =>
+              c.format === 'money' || c.format === 'pct' ||
+              c.format === 'int'   || c.format === 'number');
+            return (
+              <div key={idx} className="flex items-center gap-2">
+                <select className="input flex-1" value={f.column_key}
+                        onChange={e => patchRowFilter(idx, { column_key: e.target.value })}>
+                  <option value="">— column —</option>
+                  {numericCols.map(c => (
+                    <option key={c.key} value={c.key}>{c.label} ({c.key})</option>
+                  ))}
+                </select>
+                <select className="input w-20" value={f.op}
+                        onChange={e => patchRowFilter(idx, { op: e.target.value as RowFilterOp })}>
+                  <option value="gt">&gt;</option>
+                  <option value="gte">&ge;</option>
+                  <option value="eq">=</option>
+                  <option value="neq">&ne;</option>
+                  <option value="lte">&le;</option>
+                  <option value="lt">&lt;</option>
+                </select>
+                <input type="number" step="any" className="input w-32"
+                       value={Number.isFinite(f.value) ? f.value : 0}
+                       onChange={e => patchRowFilter(idx, { value: Number(e.target.value) || 0 })} />
+                <button type="button"
+                        className="text-ink-500 hover:text-red-600 text-lg px-2 leading-none"
+                        title="remove filter"
+                        onClick={() => removeRowFilter(idx)}>×</button>
+              </div>
+            );
+          })}
+
+          <button type="button" className="btn-secondary text-xs" onClick={addRowFilter}>
+            + Add filter
+          </button>
         </div>
       </div>
 

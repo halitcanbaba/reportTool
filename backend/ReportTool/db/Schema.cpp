@@ -3,7 +3,7 @@
 
 namespace
 {
-   constexpr int kCurrentSchemaVersion = 16;
+   constexpr int kCurrentSchemaVersion = 17;
 
    //--- Tables that survive every version (managers, regex_filters,
    //--- daily_cache, deal_cache). These are idempotent.
@@ -477,6 +477,17 @@ namespace
       if(!db.Exec(kV16Tables, err)) return false;
       return WriteVersion(db, 16, err);
    }
+
+   //--- v16 → v17: pre-aggregation per-login row filter spec on templates.
+   //--- Stored as a JSON array of {column_key, op, value} objects, AND'ed
+   //--- together. Empty string = no filter. See ReportTemplate::row_filters
+   //--- in Records.h for semantics + Engine.cpp for the evaluation point.
+   bool MigrateToV17(SqliteDb& db, std::string* err)
+   {
+      if(!db.Exec("ALTER TABLE report_templates ADD COLUMN row_filters_json TEXT NOT NULL DEFAULT ''", err))
+         return false;
+      return WriteVersion(db, 17, err);
+   }
 }
 
 bool Schema::Apply(SqliteDb& db, std::string* err)
@@ -533,6 +544,9 @@ bool Schema::Apply(SqliteDb& db, std::string* err)
       if(!db.Exec(
          "ALTER TABLE ready_made_reports ADD COLUMN deposit_filter_id INTEGER NULL "
          "REFERENCES deposit_filters(id) ON DELETE SET NULL", err)) return false;
+      //--- v17: per-template row_filters_json blob on report_templates.
+      if(!db.Exec("ALTER TABLE report_templates ADD COLUMN row_filters_json TEXT NOT NULL DEFAULT ''", err))
+         return false;
       return WriteVersion(db, kCurrentSchemaVersion, err);
    }
    if(v < 2)
@@ -594,6 +608,10 @@ bool Schema::Apply(SqliteDb& db, std::string* err)
    if(v < 16)
    {
       if(!MigrateToV16(db, err)) return false;
+   }
+   if(v < 17)
+   {
+      if(!MigrateToV17(db, err)) return false;
    }
    //--- v >= current: no-op.
    return true;
