@@ -125,6 +125,9 @@ namespace
    {
       json dps = json::array();
       for(const auto& d : t.date_params) dps.push_back(d);
+      json rfs = json::array();
+      for(const auto& f : t.row_filters)
+         rfs.push_back({ {"column_key", f.column_key}, {"op", f.op}, {"value", f.value} });
       return json{
          { "id",            t.id },
          { "name",          t.name },
@@ -137,6 +140,7 @@ namespace
                                 {"direction",  t.sort.descending ? "desc" : "asc"},
                                 {"abs",        t.sort.abs_value},
                              } },
+         { "row_filters",   rfs },
          { "default_top_n", t.default_top_n },
          { "folder_id",     t.folder_id ? json(t.folder_id) : json(nullptr) },
          { "sort_order",    t.sort_order },
@@ -167,6 +171,31 @@ namespace
             t->sort.descending = j["sort"].value("direction", std::string("desc")) != "asc";
             //--- Backward compat: absent `abs` defaults to false.
             t->sort.abs_value  = j["sort"].value("abs", false);
+         }
+         //--- Pre-aggregation row filters: drop a login from the data set
+         //--- before bucket formation if any of its referenced column
+         //--- formulas evaluates to a value that doesn't pass the op/value
+         //--- check. Whitelist ops to keep DB downstream consumers safe.
+         t->row_filters.clear();
+         if(j.contains("row_filters") && j["row_filters"].is_array())
+         {
+            static const std::vector<std::string> kValidOps = {
+               "gt","gte","eq","neq","lte","lt"
+            };
+            for(const auto& fj : j["row_filters"])
+            {
+               if(!fj.is_object()) continue;
+               RowFilter f;
+               f.column_key = fj.value("column_key", std::string());
+               f.op         = fj.value("op",         std::string());
+               f.value      = fj.value("value",      0.0);
+               if(f.column_key.empty()) continue;
+               if(std::find(kValidOps.begin(), kValidOps.end(), f.op) == kValidOps.end()) {
+                  *err = "row_filters[].op must be one of gt/gte/eq/neq/lte/lt";
+                  return false;
+               }
+               t->row_filters.push_back(std::move(f));
+            }
          }
          t->default_top_n = j.value("default_top_n", 0u);
          //--- PATCH semantics: missing key leaves the existing folder_id intact;

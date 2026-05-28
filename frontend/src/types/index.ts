@@ -224,6 +224,15 @@ export type SortSpec = {
   abs?:       boolean;
 };
 
+//--- Pre-aggregation per-login row filter. Each entry references a
+//--- numeric column by its key; the engine evaluates that column's
+//--- formula per login (BEFORE pivot bucket formation) and drops the
+//--- login if any filter fails. AND semantics across multiple filters.
+//--- Works correctly in both per_account and future pivot/aggregate
+//--- modes — dropped logins never contribute to any sum/count.
+export type RowFilterOp = 'gt' | 'gte' | 'eq' | 'neq' | 'lte' | 'lt';
+export type RowFilter   = { column_key: string; op: RowFilterOp; value: number };
+
 export type Template = {
   id: number;
   name: string;
@@ -232,6 +241,7 @@ export type Template = {
   date_params: string[];
   columns: Column[];
   sort: SortSpec;
+  row_filters?: RowFilter[];
   default_top_n: number;
   folder_id?: number | null;
   sort_order?: number;

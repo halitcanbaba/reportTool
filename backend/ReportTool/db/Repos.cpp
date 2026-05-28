@@ -465,10 +465,52 @@ bool DepositFilterRepo::Delete(SqliteDb& db, int64_t id)
 namespace
 {
    //--- SELECT column order shared by all template reads. v13 adds sort_order
-   //--- at the tail so existing column indices don't shift.
+   //--- at the tail so existing column indices don't shift. v17 adds
+   //--- row_filters_json at the tail for the same reason.
    const char* kTemplateSelectCols =
       "id,name,description,row_model,date_params,columns_json,sort_json,default_top_n,"
-      "created_at,updated_at,folder_id,deleted_at,sort_order";
+      "created_at,updated_at,folder_id,deleted_at,sort_order,row_filters_json";
+
+   //--- Row filters serialize as a JSON array of plain objects:
+   //--- [{"column_key":"net","op":"gt","value":0}, ...]. Empty string or
+   //--- malformed JSON → empty vector (don't crash on legacy rows, just
+   //--- act as "no filter"). Op is whitelisted to keep the DB from ever
+   //--- producing surprising values downstream.
+   std::string RowFiltersToJsonString(const std::vector<RowFilter>& filters)
+   {
+      if(filters.empty()) return "";
+      nlohmann::json arr = nlohmann::json::array();
+      for(const auto& f : filters) {
+         arr.push_back({
+            { "column_key", f.column_key },
+            { "op",         f.op         },
+            { "value",      f.value      },
+         });
+      }
+      return arr.dump();
+   }
+
+   std::vector<RowFilter> RowFiltersFromJsonString(const std::string& s)
+   {
+      std::vector<RowFilter> out;
+      if(s.empty()) return out;
+      auto j = nlohmann::json::parse(s, nullptr, false);
+      if(j.is_discarded() || !j.is_array()) return out;
+      static const std::vector<std::string> kValidOps = {
+         "gt","gte","eq","neq","lte","lt"
+      };
+      for(const auto& it : j) {
+         if(!it.is_object()) continue;
+         RowFilter f;
+         f.column_key = it.value("column_key", std::string());
+         f.op         = it.value("op",         std::string());
+         f.value      = it.value("value",      0.0);
+         if(f.column_key.empty()) continue;
+         if(std::find(kValidOps.begin(), kValidOps.end(), f.op) == kValidOps.end()) continue;
+         out.push_back(std::move(f));
+      }
+      return out;
+   }
 
    void FillTemplateFromStmt(SqliteStmt& st, ReportTemplate& t)
    {
@@ -486,6 +528,7 @@ namespace
       t.folder_id     = st.IsNull(10) ? 0 : st.ColI64(10);
       t.deleted_at    = st.IsNull(11) ? 0 : st.ColI64(11);
       t.sort_order    = st.ColInt(12);
+      t.row_filters   = RowFiltersFromJsonString(st.ColText(13));
    }
 }
 
@@ -525,8 +568,8 @@ int64_t TemplateRepo::Insert(SqliteDb& db, ReportTemplate& t)
    const int64_t now = (int64_t)time(nullptr);
    SqliteStmt st(db,
       "INSERT INTO report_templates(name,description,row_model,date_params,columns_json,"
-      "sort_json,default_top_n,created_at,updated_at,folder_id,sort_order) "
-      "VALUES(?,?,?,?,?,?,?,?,?,?,?)");
+      "sort_json,default_top_n,created_at,updated_at,folder_id,sort_order,row_filters_json) "
+      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)");
    st.BindText(1, t.name);
    st.BindText(2, t.description);
    st.BindText(3, t.row_model.empty() ? "per_account" : t.row_model);
@@ -538,6 +581,7 @@ int64_t TemplateRepo::Insert(SqliteDb& db, ReportTemplate& t)
    st.BindI64 (9, now);
    if(t.folder_id) st.BindI64(10, t.folder_id); else st.BindNull(10);
    st.BindInt (11, t.sort_order);
+   st.BindText(12, RowFiltersToJsonString(t.row_filters));
    st.Step();
    t.id = db.LastInsertRowid();
    t.created_at = t.updated_at = now;
@@ -550,7 +594,8 @@ bool TemplateRepo::Update(SqliteDb& db, ReportTemplate& t)
    const int64_t now = (int64_t)time(nullptr);
    SqliteStmt st(db,
       "UPDATE report_templates SET name=?,description=?,row_model=?,date_params=?,"
-      "columns_json=?,sort_json=?,default_top_n=?,updated_at=?,folder_id=?,sort_order=? "
+      "columns_json=?,sort_json=?,default_top_n=?,updated_at=?,folder_id=?,sort_order=?,"
+      "row_filters_json=? "
       "WHERE id=?");
    st.BindText(1, t.name);
    st.BindText(2, t.description);
@@ -562,7 +607,8 @@ bool TemplateRepo::Update(SqliteDb& db, ReportTemplate& t)
    st.BindI64 (8, now);
    if(t.folder_id) st.BindI64(9, t.folder_id); else st.BindNull(9);
    st.BindInt (10, t.sort_order);
-   st.BindI64 (11, t.id);
+   st.BindText(11, RowFiltersToJsonString(t.row_filters));
+   st.BindI64 (12, t.id);
    st.Step();
    t.updated_at = now;
    return true;

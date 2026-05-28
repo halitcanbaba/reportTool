@@ -460,6 +460,20 @@ struct SortSpec
    bool        abs_value  = false;
 };
 
+//--- Pre-aggregation per-login row filter. Each entry references a
+//--- ColumnSpec by key; the engine evaluates that column's formula in a
+//--- per-login EvalContext (this user's info + this login's deals) BEFORE
+//--- pivot bucket formation, and erases the user from the working set if
+//--- any filter fails. AND semantics across multiple entries. Used for
+//--- "include only logins with net_equity > 0" style filtering — works
+//--- correctly in both per_account and future pivot/aggregate modes.
+struct RowFilter
+{
+   std::string column_key;   // matches ColumnSpec::key
+   std::string op;           // "gt" | "gte" | "eq" | "neq" | "lte" | "lt"
+   double      value = 0.0;  // numeric threshold (money/pct/int/number)
+};
+
 //--- Saved formula building block (formula_blueprints table).
 struct FormulaBlueprint
 {
@@ -483,6 +497,9 @@ struct ReportTemplate
    std::vector<std::string> date_params;            // ordered named slots
    std::vector<ColumnSpec>  columns;
    SortSpec                 sort;
+   //--- AND-list of pre-aggregation per-login filters. Empty = no filter.
+   //--- See RowFilter above for semantics + insertion point.
+   std::vector<RowFilter>   row_filters;
    uint32_t                 default_top_n = 0;   // 0 = no limit
    int64_t                  folder_id     = 0;   // 0 = NULL = unfiled (FK -> folders.id)
    int                      sort_order    = 0;   // v13: rank among siblings
